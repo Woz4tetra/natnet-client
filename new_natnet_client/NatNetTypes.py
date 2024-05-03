@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import struct
 from math import atan2, asin
-from typing import Tuple
+from typing import Dict, Tuple
 from enum import Enum
 
 class NAT_Data(Enum):
@@ -86,6 +86,10 @@ class Marker_data:
 class Marker_set_data(MoCapData):
   num_marker_sets: int
   marker_sets: Tuple[Marker_data, ...]
+  marker_sets_d: Dict[str, Marker_data] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "marker_sets_d", { instance.name:instance for instance in self.marker_sets})
 
 @dataclass(frozen=True)
 class Legacy_marker_set_data(MoCapData):
@@ -104,11 +108,19 @@ class Rigid_body:
 class Rigid_body_data(MoCapData):
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body, ...]
+  rigid_bodies_d: Dict[int, Rigid_body] = field(init=False)
+  
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
 @dataclass(frozen=True)
 class Skeleton:
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body, ...]
+  rigid_bodies_d: Dict[int, Rigid_body] = field(init=False)
+  
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
 @dataclass(frozen=True)
 class Skeleton_data(MoCapData):
@@ -138,11 +150,21 @@ class Asset:
   rigid_bodies: Tuple[Asset_RB, ...]
   num_markers: int
   markers: Tuple[Asset_marker, ...]
+  rigid_bodies_d: Dict[int, Asset_RB] = field(init=False)
+  markers_d: Dict[int, Asset_marker] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
 @dataclass(frozen=True)
 class Asset_data(MoCapData):
   num_assets: int
   assets: Tuple[Asset, ...]
+  assets_d: Dict[int, Asset] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "assets_d", { instance.id : instance for instance in self.assets})
 
 @dataclass(frozen=True)
 class Labeled_marker:
@@ -156,6 +178,10 @@ class Labeled_marker:
 class Labeled_marker_data(MoCapData):
   num_markers: int
   markers: Tuple[Labeled_marker, ...]
+  markers_d: Dict[int, Labeled_marker] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
 @dataclass(frozen=True)
 class Channel:
@@ -172,6 +198,10 @@ class Force_plate:
 class Force_plate_data(MoCapData):
   num_force_plates: int
   force_plates: Tuple[Force_plate, ...]
+  force_plates_d: Dict[int, Force_plate] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "force_plates_d", { instance.id : instance for instance in self.force_plates})
 
 @dataclass(frozen=True)
 class Device:
@@ -183,6 +213,10 @@ class Device:
 class Device_data(MoCapData):
   num_devices: int
   devices: Tuple[Device, ...]
+  devices_d: Dict[int, Device] = field(init=False)
+  
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.devices})
 
 @dataclass(frozen=True)
 class Frame_suffix:
@@ -233,6 +267,10 @@ class Rigid_body_description(Descriptor):
   pos: Position
   num_markers:int
   markers: Tuple[RB_marker, ...]
+  markers_d: Dict[int, RB_marker] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
 @dataclass(frozen=True)
 class Skeleton_description(Descriptor):
@@ -240,6 +278,10 @@ class Skeleton_description(Descriptor):
   id: int
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body_description, ...]
+  rigid_bodies_d: Dict[int, Rigid_body_description] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
 @dataclass(frozen=True)
 class Force_plate_description(Descriptor):
@@ -287,3 +329,7 @@ class Asset_description(Descriptor):
   rigid_bodies: Tuple[Rigid_body_description, ...]
   num_markers: int
   markers: Tuple
+  rigid_bodies_d: Dict[int, Rigid_body_description] = field(init=False)
+
+  def __post_init__(self):
+    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})

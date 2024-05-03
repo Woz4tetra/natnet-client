@@ -8,7 +8,7 @@ import logging
 from threading import Thread, Lock
 from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap
 from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
-
+from copy import copy
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,11 +29,13 @@ class NatNetClient:
   data_port: int = 1511
   max_buffer_size: InitVar[int] = 255
   mocap: MoCap | None = field(init=False, default=None)
-  # Flag to control if command thread and data thread should be running
+  __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
   __command_socket: socket.socket | None = field(init=False, repr=False, default=None)
   __data_socket: socket.socket | None = field(init=False, repr=False, default=None)
   __freeze: bool = field(init=False, repr=False, default=False)
+
+  # TODO: Add bitstream change support
 
   @property
   def connected(self) -> bool:
@@ -41,7 +43,8 @@ class NatNetClient:
 
   @property
   def server_info(self) -> Server_info:
-    return self.__server_info
+    with self.__server_info_lock:
+      return copy(self.__server_info)
 
   @property
   def server_responses(self) -> deque[int | str]:
@@ -55,6 +58,9 @@ class NatNetClient:
 
   @property
   def buffer_size(self):
+    """
+      Buffer size for messages/responses queues
+    """
     return self.__max_buffer_size
 
   @buffer_size.setter
@@ -129,10 +135,8 @@ class NatNetClient:
     self.__server_messages: deque[str] = deque(maxlen=self.__max_buffer_size)
 
     self.__server_info: Server_info = Server_info("None", (0,0,0,0), 0,0)
-
-    # TODO: change to dependency injection model based 
-    # Map unpacking methods with respective messages
     
+    # Map unpacking methods with respective messages
     self.__mapped: Dict[NAT_Messages, Callable[[bytes,int], int] ] = {
       NAT_Messages.FRAME_OF_DATA: self.__unpack_mocap_data,
       NAT_Messages.MODEL_DEF: self.__unpack_data_descriptions,
@@ -158,8 +162,14 @@ class NatNetClient:
       raise FrozenInstanceError("This attribute can't be changed because client is already connected")
     super().__setattr__(name, value)
 
-  def connect(self):
-    if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return
+  def connect(self) -> bool:
+    """
+      Creates the connection sockets and starts threads for receiving messages/responses and data
+      
+      Returns:
+        bool: whether the connection was successful
+    """
+    if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return False
     logging.info("Client connected")
     self.send_request(NAT_Messages.CONNECT,"")
     self.__running = True
@@ -168,8 +178,16 @@ class NatNetClient:
     self.__command_thread.start()
     self.__data_thread = Thread(target=self.__data_thread_function)
     self.__data_thread.start()
+    return True
 
   def send_request(self, NAT_command:NAT_Messages, command:str) -> int:
+    """
+      Send request to server
+      
+      Returns:
+      ---
+        int: number of bytes send, (-1) if something went wrong
+    """
     if not self.__running or NAT_command == NAT_Messages.UNDEFINED: return -1
     packet_size: int = 0
     if  NAT_command == NAT_Messages.KEEP_ALIVE or \
@@ -196,6 +214,12 @@ class NatNetClient:
       return self.__command_socket.sendto(data, (self.server_address, self.command_port))
 
   def send_command(self, command: str):
+    """
+      Tries to send the command 3 times
+
+      Returns:
+        bool: whether the was send successfully
+    """
     res:int = -1
     for _ in range(3):
       res = self.send_request(NAT_Messages.REQUEST, command)
@@ -204,9 +228,13 @@ class NatNetClient:
     return res != -1
 
   def __update_unpacker_version(self):
+    """
+      Changes unpacker version based on server's bit stream version
+    """
     self.__unpacker = DataUnpackerV3_0
-    if (self.__server_info.nat_net_major == 4 and self.__server_info.nat_net_minor >= 1) or self.__server_info.nat_net_major == 0:
-      self.__unpacker = DataUnpackerV4_1
+    with self.__server_info_lock:
+      if (self.__server_info.nat_net_major == 4 and self.__server_info.nat_net_minor >= 1) or self.__server_info.nat_net_major == 0:
+        self.__unpacker = DataUnpackerV4_1
     self.__mapped_data_descriptors: Dict[NAT_Data, Callable[[bytes], Tuple[Dict, int]]] = {
       NAT_Data.MARKER_SET: self.__unpacker.unpack_marker_set_description,
       NAT_Data.RIGID_BODY: self.__unpacker.unpack_rigid_body_description,
@@ -220,7 +248,6 @@ class NatNetClient:
   def __unpack_mocap_data(self, data:bytes, packet_size:int):
     self.mocap, offset = self.__unpacker.unpack_mocap_data(data)
     return offset
-
 
   def __unpack_data_descriptions(self, data:bytes, packet_size:int):
     offset = 0
@@ -241,16 +268,15 @@ class NatNetClient:
   def __unpack_server_info(self, data: bytes, __:int) -> int:
     offset = 0
     template = {}
-    # Application name info
     application_name, _, _ = data[offset:(offset:=offset+256)].partition(b'\0')
     template['application_name'] = str(application_name, "utf-8")
-    # Server Version info
     template['version'] = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
-    # NatNet Version info
     template['nat_net_major'], template['nat_net_minor'], _, _ = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
     with self.__server_info_lock:
       self.__server_info = Server_info(**template)
     self.__update_unpacker_version
+    if template['nat_net_major'] >= 4 and self.use_multicast == False:
+      self.__can_change_bitstream = True
     return offset
 
   def __unpack_server_response(self, data:bytes, packet_size:int) -> int:
@@ -260,9 +286,21 @@ class NatNetClient:
       return 4
     response, _, _ = data[:256].partition(b'\0')
     if len(response) < 30:
-      # TODO: Unpack bit stream version
+      response = response.decode('utf-8')
+      if response.startswith('Bitstream'):
+        messageList = response.split(',')
+        if len(messageList) > 1 and messageList[0] == 'Bitstream':
+          nn_version = messageList[1].split('.')
+          with self.__server_info_lock:
+            template = asdict(self.__server_info)
+          if len(nn_version) > 1:
+            template["nat_net_major"] = int(nn_version[0])
+            template["nat_net_minor"] = int(nn_version[1])
+            with self.__server_info_lock:
+              self.__server_info = Server_info(**template)
+            self.__update_unpacker_version()
       with self.__server_responses_lock:
-        self.__server_responses.append(str(response, "utf-8"))
+        self.__server_responses.append(response)
     return len(response)
 
   def __unpack_server_message(self, data:bytes, __:int):
