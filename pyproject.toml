@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "natnet-client"
+name = "new-natnet-client"
 version = "4.1.0"
 description = "natnet client for motive application for python"
 authors = ["Ignacio de la Torre Arias <ignaciodlta@gmail.com>"]

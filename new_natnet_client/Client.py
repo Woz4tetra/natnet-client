@@ -6,8 +6,8 @@ from typing import Any, Tuple, Dict, Callable
 import socket
 import logging
 from threading import Thread, Lock
-from natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap
-from natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
+from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap
+from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
 
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')

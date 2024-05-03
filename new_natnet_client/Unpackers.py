@@ -1,4 +1,4 @@
-import natnet_client.NatNetTypes as NatNetTypes
+import new_natnet_client.NatNetTypes as NatNetTypes
 from dataclasses import asdict
 from typing import Tuple, Dict
 from collections import deque

@@ -1,4 +1,4 @@
-from natnet_client.Client import NatNetClient
+from new_natnet_client.Client import NatNetClient
 
 if __name__ == "__main__":
   client = NatNetClient()
