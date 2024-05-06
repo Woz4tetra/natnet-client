@@ -7,7 +7,7 @@ if __name__ == "__main__":
     print(client.server_info)
     while input("Out? [N/y]").upper() != 'Y':
       requested_time = time.time_ns()
-      frame_data = client.mocap
+      frame_data = client.MoCap
       print(f"Response time: {time.time_ns()-requested_time}")
       if frame_data is not None:
         print(frame_data.rigid_body_data.rigid_bodies)

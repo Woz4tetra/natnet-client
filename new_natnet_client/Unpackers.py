@@ -498,7 +498,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
     return NatNetTypes.Frame_suffix(**template), offset
 
   @classmethod
-  def unpack_mocap_data(cls, data:bytes) -> Tuple[NatNetTypes.MoCap,int]:
+  def unpack_mocap_data(cls, data:bytes) -> NatNetTypes.MoCap:
     offset = 0
     tmp_offset = 0
     template = {}
@@ -533,7 +533,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
     template['suffix_data'], tmp_offset = cls.unpack_frame_suffix_data(data[offset:])
     offset += tmp_offset
 
-    return NatNetTypes.MoCap(**template), offset
+    return NatNetTypes.MoCap(**template)
 
   @classmethod
   def unpack_rigid_body_description(cls, data: bytes) -> Tuple[Dict[int, NatNetTypes.Rigid_body_description], int]:
