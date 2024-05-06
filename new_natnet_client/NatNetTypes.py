@@ -216,7 +216,7 @@ class Device_data(MoCapData):
   devices_d: Dict[int, Device] = field(init=False)
   
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.devices})
+    object.__setattr__(self, "devices_d", { instance.id : instance for instance in self.devices})
 
 @dataclass(frozen=True)
 class Frame_suffix:
