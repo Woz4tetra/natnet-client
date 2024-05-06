@@ -28,7 +28,7 @@ class NatNetClient:
   command_port: int = 1510
   data_port: int = 1511
   max_buffer_size: InitVar[int] = 255
-  mocap: MoCap | None = field(init=False, default=None)
+  __mocap_bytes: bytes | None = field(init=False, default=None)
   __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
   __command_socket: socket.socket | None = field(init=False, repr=False, default=None)
@@ -45,6 +45,12 @@ class NatNetClient:
   def server_info(self) -> Server_info:
     with self.__server_info_lock:
       return copy(self.__server_info)
+
+  @property
+  def MoCap(self) -> MoCap | None:
+    with self.__mocap_bytes_lock:
+      if self.__mocap_bytes is None: return None
+      return self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
 
   @property
   def server_responses(self) -> deque[int | str]:
@@ -127,6 +133,7 @@ class NatNetClient:
     self.__server_info_lock = Lock()
     self.__server_responses_lock = Lock()
     self.__server_messages_lock = Lock()
+    self.__mocap_bytes_lock = Lock()
 
     self.__max_buffer_size = max_buffer_size
     # Buffer for server responses
@@ -246,8 +253,9 @@ class NatNetClient:
     }
 
   def __unpack_mocap_data(self, data:bytes, packet_size:int):
-    self.mocap, offset = self.__unpacker.unpack_mocap_data(data)
-    return offset
+    with self.__mocap_bytes_lock:
+      self.__mocap_bytes = data
+    return packet_size
 
   def __unpack_data_descriptions(self, data:bytes, packet_size:int):
     offset = 0
