@@ -3,8 +3,11 @@ from dataclasses import asdict
 from typing import Tuple, Dict
 from collections import deque
 from struct import unpack
+from itertools import batched
 
 class DataUnpackerV3_0:
+  rigid_body_lenght:int = 38
+  marker_lenght:int = 26
   @classmethod
   def unpack_data_size(cls, data:bytes) -> Tuple[int, int]:
     return 0,0
@@ -23,16 +26,16 @@ class DataUnpackerV3_0:
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
     markers = deque()
-    for i in range(template['num_marker_sets']):
+    for _ in range(template['num_marker_sets']):
       template_marker = {}
       name, _, _ = data[offset:].partition(b'\0')
       offset += len(name) + 1
       template_marker['name'] = str(name, encoding="utf-8")
       template_marker['num_markers'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-      positions = deque()
-      for j in range(template_marker['num_markers']):
-        positions.append(NatNetTypes.Position.unpack(data[offset:(offset:=offset+12)]))
-      template_marker['positions'] = tuple(positions)
+      template_marker['positions'] = tuple(map(
+        lambda position_data: NatNetTypes.Position.unpack(bytes(position_data)),
+        batched(data[offset:offset:=offset+(12*template_marker['num_markers'])],12)
+      ))
       markers.append(NatNetTypes.Marker_data(**template_marker))
     template['marker_sets'] = tuple(markers)
     return NatNetTypes.Marker_set_data(**template), offset
@@ -44,9 +47,10 @@ class DataUnpackerV3_0:
     template['num_markers'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
-    positions = deque()
-    for _ in range(template['num_markers']):
-      positions.append(NatNetTypes.Position.unpack(data[offset:(offset:=offset+12)]))
+    positions = deque(map(
+      lambda position_data: NatNetTypes.Position.unpack(bytes(position_data)),
+      batched(data[offset:offset:=offset+(12*template['num_markers'])],12)
+    ))
     template['positions'] = tuple(positions)
     return NatNetTypes.Legacy_marker_set_data(**template), offset
 
@@ -69,12 +73,10 @@ class DataUnpackerV3_0:
     template['num_rigid_bodies'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
-    rigid_bodies = deque()
-    for _ in range(template['num_rigid_bodies']):
-      rigid_body, tmp_offset = cls.unpack_rigid_body(data[offset:])
-      offset += tmp_offset
-      rigid_bodies.append(rigid_body)
-    template['rigid_bodies'] = tuple(rigid_bodies)
+    template['rigid_bodies'] = tuple(map(
+        lambda rigid_body_data: cls.unpack_rigid_body(bytes(rigid_body_data))[0],
+        batched(data[offset:(offset:=offset+(cls.rigid_body_lenght*template['num_rigid_bodies']))], cls.rigid_body_lenght) 
+    ))
     return NatNetTypes.Rigid_body_data(**template), offset
   
   @classmethod
@@ -83,12 +85,10 @@ class DataUnpackerV3_0:
     template = {}
     template['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
     template['num_rigid_bodies'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-    rigid_bodies = deque()
-    for _ in range(template['num_rigid_bodies']):
-      rigid_body, tmp_offset = cls.unpack_rigid_body(data[offset:])
-      offset += tmp_offset
-      rigid_bodies.append(rigid_body)
-    template['rigid_bodies'] = tuple(rigid_bodies)
+    template['rigid_bodies'] = tuple(map(
+        lambda rigid_body_data: cls.unpack_rigid_body(bytes(rigid_body_data))[0],
+        batched(data[offset:(offset:=offset+(cls.rigid_body_lenght*template['num_rigid_bodies']))], cls.rigid_body_lenght) 
+    ))
     return NatNetTypes.Skeleton(**template), offset
 
   @classmethod
@@ -130,23 +130,42 @@ class DataUnpackerV3_0:
     )
 
   @classmethod
+  def unpack_labeled_marker(cls, data:bytes) -> Tuple[NatNetTypes.Labeled_marker, int]:
+    offset = 0
+    template = {}
+    template['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
+    template['pos'] = NatNetTypes.Position.unpack(data[offset:(offset:=offset+12)])
+    template['size'] = unpack('<f', data[offset:(offset:=offset+4)])[0]
+    template['param'] = unpack( 'h', data[offset:(offset:=offset+2)])[0]
+    template['residual'] = unpack('<f', data[offset:(offset:=offset+4)])[0] * 1000.0
+    return NatNetTypes.Labeled_marker(**template), offset
+
+  @classmethod
   def unpack_labeled_marker_data(cls, data:bytes) -> Tuple[NatNetTypes.Labeled_marker_data, int]:
     offset = 0
     template = {}
     template['num_markers'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
-    markers = deque()
-    for _ in range(template['num_markers']):
-      template_marker = {}
-      template_marker['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-      template_marker['pos'] = NatNetTypes.Position.unpack(data[offset:(offset:=offset+12)])
-      template_marker['size'] = unpack('<f', data[offset:(offset:=offset+4)])[0]
-      template_marker['param'] = unpack( 'h', data[offset:(offset:=offset+2)])[0]
-      template_marker['residual'] = unpack('<f', data[offset:(offset:=offset+4)])[0] * 1000.0
-      markers.append(NatNetTypes.Labeled_marker(**template_marker))
-    template['markers'] = tuple(markers)
+    template['markers'] = tuple(map(
+      lambda marker_data: cls.unpack_labeled_marker(bytes(marker_data))[0],
+      batched(data[offset:(offset:=offset+(cls.marker_lenght*template['num_markers']))],cls.marker_lenght)
+    ))
     return NatNetTypes.Labeled_marker_data(**template), offset
+
+  @classmethod
+  def unpack_channels(cls, data:bytes, num_channels:int) -> Tuple[Tuple[NatNetTypes.Channel, ...],int]:
+    offset = 0
+    channels = deque()
+    for _ in range(num_channels):
+      template_channel = {}
+      template_channel['num_frames'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
+      template_channel['frames'] = tuple(map(
+        lambda frame_data: unpack('<f', frame_data)[0],
+        batched(data[offset:(offset:=offset+(4*template_channel['num_frames']))],4)
+      ))
+      channels.append(NatNetTypes.Channel(**template_channel))
+    return tuple(channels), offset
 
   @classmethod
   def unpack_force_plate_data(cls, data:bytes) -> Tuple[NatNetTypes.Force_plate_data, int]:
@@ -156,20 +175,12 @@ class DataUnpackerV3_0:
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
     force_plates = deque()
-    for i in range(template['num_force_plates']):
+    for _ in range(template['num_force_plates']):
       template_force_plate = {}
       template_force_plate['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
       template_force_plate['num_channels'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-      channels = deque()
-      for j in range(template_force_plate['num_channels']):
-        template_channel = {}
-        template_channel['num_frames'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-        frames = deque()
-        for k in range(template_channel['num_frames']):
-          frames.append(unpack('<f', data[offset:(offset:=offset+4)])[0])
-        template_channel['frames'] = tuple(frames)
-        channels.append(NatNetTypes.Channel(**template_channel))
-      template_force_plate['channels'] = tuple(channels)
+      template_force_plate['channels'], tmp_offset = cls.unpack_channels(data[offset:], template_force_plate['num_channels'])
+      offset += tmp_offset
       force_plates.append(NatNetTypes.Force_plate(**template_force_plate))
     template['force_plates'] = tuple(force_plates)
     return NatNetTypes.Force_plate_data(**template), offset
@@ -182,20 +193,12 @@ class DataUnpackerV3_0:
     _, tmp_offset = cls.unpack_data_size(data)
     offset += tmp_offset
     devices = deque()
-    for i in range(template['num_devices']):
+    for _ in range(template['num_devices']):
       template_device = {}
       template_device['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
       template_device['num_channels'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-      channels = deque()
-      for j in range(template_device['num_channels']):
-        template_channel = {}
-        template_channel['num_frames'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-        frames = deque()
-        for k in range(template_channel['num_frames']):
-          frames.append(unpack('<f', data[offset:(offset:=offset+4)])[0])
-        template_channel['frames'] = tuple(frames)
-        channels.append(NatNetTypes.Channel(**template_channel))
-      template_device['channels'] = tuple(channels)
+      template_device['channels'], tmp_offset = cls.unpack_channels(data[offset:], template_device['num_channels'])
+      offset += tmp_offset
       devices.append(NatNetTypes.Device(**template_device))
     template['devices'] = tuple(devices)
     return NatNetTypes.Device_data(**template), offset
@@ -283,7 +286,7 @@ class DataUnpackerV3_0:
     template["name"] = ""
     markers = deque()
     for _ in range(template['num_markers']):
-      template['pos'] = data[offset_pos:(offset_pos:=offset_pos+12)]
+      template['pos'] = NatNetTypes.Position.unpack(data[offset_pos:(offset_pos:=offset_pos+12)])
       template['id'] = int.from_bytes(data[offset_Y:(offset_Y:=offset_Y+4)], byteorder='little', signed=True)
       markers.append(NatNetTypes.RB_marker(**template))
     template['markers'] = tuple(markers)
@@ -416,6 +419,8 @@ class DataUnpackerV3_0:
     return {template['id']:NatNetTypes.Asset_description(**template)}, offset
 
 class DataUnpackerV4_1(DataUnpackerV3_0):
+  asset_rigid_body_lenght:int = 38
+  asset_marker_lenght: int = 26
   @classmethod
   def unpack_data_size(cls, data: bytes) -> Tuple[int, int]:
     offset = 0
@@ -450,19 +455,15 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
     template = {}
     template['id'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
     template['num_rigid_bodies'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-    rigid_bodies = deque()
-    for _ in range(template['num_rigid_bodies']):
-      rigid_body, tmp_offset = cls.unpack_asset_rigid_body(data[offset:])
-      offset += tmp_offset
-      rigid_bodies.append(rigid_body)
-    template['rigid_bodies'] = tuple(rigid_bodies)
+    template['rigid_bodies'] = tuple(map(
+      lambda rigid_body_data: cls.unpack_asset_rigid_body(bytes(rigid_body_data))[0],
+      batched(data[offset:(offset:=offset+(cls.asset_rigid_body_lenght*template['num_rigid_bodies']))], cls.asset_rigid_body_lenght)
+    ))
     template['num_markers'] = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-    markers = deque()
-    for _ in range(template['num_markers']):
-      marker, tmp_offset = cls.unpack_asset_marker(data[offset:])
-      offset += tmp_offset
-      markers.append(marker)
-    template['markers'] = tuple(markers)
+    template['markers'] = tuple(map(
+      lambda marker_data: cls.unpack_asset_marker(bytes(marker_data))[0],
+      batched(data[offset:(offset:=offset+(cls.asset_marker_lenght*template['num_markers']))], cls.asset_marker_lenght)
+    ))
     return NatNetTypes.Asset(**template), offset
 
   @classmethod
