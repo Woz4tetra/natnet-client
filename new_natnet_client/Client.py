@@ -108,7 +108,6 @@ class NatNetClient:
     if self.use_multicast:
       # set to broadcast mode
       self.__command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    self.__command_socket.settimeout(2.0)
     return True
     
   def __create__data_socket(self) -> bool:
@@ -178,13 +177,12 @@ class NatNetClient:
     """
     if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return False
     logging.info("Client connected")
-    self.send_request(NAT_Messages.CONNECT,"")
     self.__running = True
-
     self.__command_thread = Thread(target=self.__command_thread_function)
     self.__command_thread.start()
     self.__data_thread = Thread(target=self.__data_thread_function)
     self.__data_thread.start()
+    self.send_request(NAT_Messages.CONNECT,"")
     return True
 
   def send_request(self, NAT_command:NAT_Messages, command:str) -> int:
@@ -195,7 +193,7 @@ class NatNetClient:
       ---
         int: number of bytes send, (-1) if something went wrong
     """
-    if not self.__running or NAT_command == NAT_Messages.UNDEFINED: return -1
+    if type(self.__command_socket) == NoneType or NAT_command == NAT_Messages.UNDEFINED: return -1
     packet_size: int = 0
     if  NAT_command == NAT_Messages.KEEP_ALIVE or \
         NAT_command == NAT_Messages.REQUEST_MODEL_DEF or \
@@ -217,7 +215,6 @@ class NatNetClient:
     data += command.encode("utf-8")
     data += b'\0'
     with self.__command_socket_lock:
-      if self.__command_socket is None: return -1
       return self.__command_socket.sendto(data, (self.server_address, self.command_port))
 
   def send_command(self, command: str):
