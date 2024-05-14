@@ -2,13 +2,14 @@ from dataclasses import dataclass, field, FrozenInstanceError, InitVar, asdict
 from collections import deque
 import struct
 from types import NoneType
-from typing import Any, Tuple, Dict, Callable
+from typing import Any, Tuple, Dict, Callable, Iterator
 import socket
 import logging
 from threading import Thread, Lock
 from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap
 from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
 from copy import copy
+import time
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,6 +30,7 @@ class NatNetClient:
   data_port: int = 1511
   max_buffer_size: InitVar[int] = 255
   __mocap_bytes: bytes | None = field(init=False, default=None)
+  __new_data_flag: bool = field(init=False, default=False)
   __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
   __command_socket: socket.socket | None = field(init=False, repr=False, default=None)
@@ -47,10 +49,13 @@ class NatNetClient:
       return copy(self.__server_info)
 
   @property
-  def MoCap(self) -> MoCap | None:
-    with self.__mocap_bytes_lock:
-      if self.__mocap_bytes is None: return None
-      return self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
+  def MoCap(self) -> Iterator[MoCap]:
+    if  self.__mocap_bytes is None: return
+    while True:
+      print("adquiring lock")
+      with self.__mocap_bytes_lock:
+        if self.__new_data_flag:
+          yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
 
   @property
   def server_responses(self) -> deque[int | str]:
@@ -153,7 +158,6 @@ class NatNetClient:
       NAT_Messages.UNDEFINED: self.__unpack_undefined_nat_message
     }
 
-    self.connect()
     self.__update_unpacker_version()
 
   def __setattr__(self, name:str, value:Any):
@@ -168,22 +172,21 @@ class NatNetClient:
       raise FrozenInstanceError("This attribute can't be changed because client is already connected")
     super().__setattr__(name, value)
 
-  def connect(self) -> bool:
-    """
-      Creates the connection sockets and starts threads for receiving messages/responses and data
-      
-      Returns:
-        bool: whether the connection was successful
-    """
-    if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return False
+  def __enter__(self) -> None:
+    if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return
     logging.info("Client connected")
     self.__running = True
-    self.__command_thread = Thread(target=self.__command_thread_function)
-    self.__command_thread.start()
     self.__data_thread = Thread(target=self.__data_thread_function)
     self.__data_thread.start()
+    self.__command_thread = Thread(target=self.__command_thread_function)
+    self.__command_thread.start()
     self.send_request(NAT_Messages.CONNECT,"")
-    return True
+    time.sleep(0.5)
+    return
+
+  def __exit__(self, exc_type, exc_value, traceback) -> None:
+    if self.__running:
+      self.shutdown()
 
   def send_request(self, NAT_command:NAT_Messages, command:str) -> int:
     """
@@ -251,6 +254,7 @@ class NatNetClient:
 
   def __unpack_mocap_data(self, data:bytes, packet_size:int):
     with self.__mocap_bytes_lock:
+      self.__new_data_flag = True
       self.__mocap_bytes = data
     return packet_size
 
@@ -341,6 +345,8 @@ class NatNetClient:
       try:
         if self.__data_socket is None: return
         data = self.__data_socket.recv(recv_buffer_size)
+      except socket.timeout:
+        pass
       except socket.error as msg:
         logging.error(f"Data thread {self.local_ip_address}: {msg}")
         data = bytes()
@@ -382,6 +388,7 @@ class NatNetClient:
     self.__data_socket = None
     self.__data_thread.join()
     self.__command_thread.join()
+    self.__freeze = False
 
   def __del__(self):
     self.shutdown()
