@@ -76,13 +76,13 @@ class MoCapData:
 class Frame_prefix(MoCapData):
   frame_number: int
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Marker_data:
   name: str
   num_markers: int
   positions: Tuple[Position, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Marker_set_data(MoCapData):
   num_marker_sets: int
   marker_sets: Tuple[Marker_data, ...]
@@ -91,12 +91,12 @@ class Marker_set_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "marker_sets_d", { instance.name:instance for instance in self.marker_sets})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Legacy_marker_set_data(MoCapData):
   num_markers: int
   positions: Tuple[Position, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Rigid_body:
   id: int
   pos: Position
@@ -104,7 +104,7 @@ class Rigid_body:
   err: float
   tracking: bool
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Rigid_body_data(MoCapData):
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body, ...]
@@ -113,7 +113,7 @@ class Rigid_body_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Skeleton:
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body, ...]
@@ -122,12 +122,12 @@ class Skeleton:
   def __post_init__(self):
     object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Skeleton_data(MoCapData):
   num_skeletons: int
   skeletons: Tuple[Skeleton, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Asset_RB:
   id: int
   pos: Position
@@ -135,7 +135,7 @@ class Asset_RB:
   err: float
   param: int
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Asset_marker:
   id: int
   pos: Position
@@ -143,7 +143,7 @@ class Asset_marker:
   param: int
   residual: float
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Asset:
   id: int
   num_rigid_bodies: int
@@ -157,7 +157,7 @@ class Asset:
     object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
     object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Asset_data(MoCapData):
   num_assets: int
   assets: Tuple[Asset, ...]
@@ -166,7 +166,7 @@ class Asset_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "assets_d", { instance.id : instance for instance in self.assets})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Labeled_marker:
   id: int
   pos: Position
@@ -174,7 +174,7 @@ class Labeled_marker:
   param: int
   residual: float
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Labeled_marker_data(MoCapData):
   num_markers: int
   markers: Tuple[Labeled_marker, ...]
@@ -183,18 +183,18 @@ class Labeled_marker_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Channel:
   num_frames: int
   frames: Tuple[float, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Force_plate:
   id: int
   num_channels: int
   channels: Tuple[Channel, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Force_plate_data(MoCapData):
   num_force_plates: int
   force_plates: Tuple[Force_plate, ...]
@@ -203,13 +203,13 @@ class Force_plate_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "force_plates_d", { instance.id : instance for instance in self.force_plates})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Device:
   id: int
   num_channels: int
   channels: Tuple[Channel, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Device_data(MoCapData):
   num_devices: int
   devices: Tuple[Device, ...]
@@ -218,7 +218,7 @@ class Device_data(MoCapData):
   def __post_init__(self):
     object.__setattr__(self, "devices_d", { instance.id : instance for instance in self.devices})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Frame_suffix:
   time_code: int
   time_code_sub: int
@@ -231,7 +231,7 @@ class Frame_suffix:
   precision_timestamp_sec: int | None = None
   precision_timestamp_frac_sec: int | None = None
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class MoCap:
   prefix_data: Frame_prefix
   marker_set_data: Marker_set_data
@@ -247,19 +247,19 @@ class MoCap:
 class Descriptor:
   ...
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Marker_set_description(Descriptor):
   name: str
   num_markers:int
   markers_names: Tuple[str, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class RB_marker:
   name:str
   id: int
   pos: Position
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Rigid_body_description(Descriptor):
   name: str
   id: int
@@ -272,7 +272,7 @@ class Rigid_body_description(Descriptor):
   def __post_init__(self):
     object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Skeleton_description(Descriptor):
   name: str
   id: int
@@ -283,7 +283,7 @@ class Skeleton_description(Descriptor):
   def __post_init__(self):
     object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Force_plate_description(Descriptor):
   id:int
   serial_number: str
@@ -296,7 +296,7 @@ class Force_plate_description(Descriptor):
   num_channels: int
   channels: Tuple[str, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Device_description(Descriptor):
   id: int
   name: str
@@ -306,13 +306,13 @@ class Device_description(Descriptor):
   num_channels: int
   channels: Tuple[str, ...]
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Camera_description(Descriptor):
   name: str
   pos: Position
   orientation: Quaternion
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Marker_description(Descriptor):
   name: str
   id: int
@@ -320,7 +320,7 @@ class Marker_description(Descriptor):
   size: float
   param: int
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Asset_description(Descriptor):
   name: str
   type: int
