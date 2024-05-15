@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import struct
 from math import atan2, asin
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 from enum import Enum
 
 class NAT_Data(Enum):
@@ -15,7 +15,7 @@ class NAT_Data(Enum):
   UNDEFINED     = -1
 
   @classmethod
-  def _missing_(cls, _: object):
+  def _missing(cls, _: object):
     return cls.UNDEFINED
 
 class NAT_Messages(Enum):
@@ -35,12 +35,12 @@ class NAT_Messages(Enum):
   UNDEFINED             = 999999
 
   @classmethod
-  def _missing_(cls, _: object):
+  def _missing(cls, _: object):
     return cls.UNDEFINED
 
 class Data:
   @classmethod
-  def unpack(cls, data:bytes):
+  def unpack(cls, data: bytes) -> Any:
     raise NotImplementedError("Subclasses must implement the unpack method")
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ class Legacy_marker_set_data(MoCapData):
 
 @dataclass(slots=True)
 class Rigid_body:
-  id: int
+  identifier: int
   pos: Position
   rot: Quaternion
   err: float
@@ -111,16 +111,17 @@ class Rigid_body_data(MoCapData):
   rigid_bodies_d: Dict[int, Rigid_body] = field(init=False)
   
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
 
 @dataclass(slots=True)
 class Skeleton:
+  identifier: int
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body, ...]
   rigid_bodies_d: Dict[int, Rigid_body] = field(init=False)
   
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
 
 @dataclass(slots=True)
 class Skeleton_data(MoCapData):
@@ -129,7 +130,7 @@ class Skeleton_data(MoCapData):
 
 @dataclass(slots=True)
 class Asset_RB:
-  id: int
+  identifier: int
   pos: Position
   rot: Quaternion
   err: float
@@ -137,7 +138,7 @@ class Asset_RB:
 
 @dataclass(slots=True)
 class Asset_marker:
-  id: int
+  identifier: int
   pos: Position
   size: float
   param: int
@@ -145,7 +146,7 @@ class Asset_marker:
 
 @dataclass(slots=True)
 class Asset:
-  id: int
+  identifier: int
   num_rigid_bodies: int
   rigid_bodies: Tuple[Asset_RB, ...]
   num_markers: int
@@ -154,8 +155,8 @@ class Asset:
   markers_d: Dict[int, Asset_marker] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
-    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
+    object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "markers_d", { instance.identifier : instance for instance in self.markers})
 
 @dataclass(slots=True)
 class Asset_data(MoCapData):
@@ -164,11 +165,11 @@ class Asset_data(MoCapData):
   assets_d: Dict[int, Asset] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "assets_d", { instance.id : instance for instance in self.assets})
+    object.__setattr__(self, "assets_d", { instance.identifier : instance for instance in self.assets})
 
 @dataclass(slots=True)
 class Labeled_marker:
-  id: int
+  identifier: int
   pos: Position
   size: int
   param: int
@@ -181,7 +182,7 @@ class Labeled_marker_data(MoCapData):
   markers_d: Dict[int, Labeled_marker] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
+    object.__setattr__(self, "markers_d", { instance.identifier : instance for instance in self.markers})
 
 @dataclass(slots=True)
 class Channel:
@@ -190,7 +191,7 @@ class Channel:
 
 @dataclass(slots=True)
 class Force_plate:
-  id: int
+  identifier: int
   num_channels: int
   channels: Tuple[Channel, ...]
 
@@ -201,11 +202,11 @@ class Force_plate_data(MoCapData):
   force_plates_d: Dict[int, Force_plate] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "force_plates_d", { instance.id : instance for instance in self.force_plates})
+    object.__setattr__(self, "force_plates_d", { instance.identifier : instance for instance in self.force_plates})
 
 @dataclass(slots=True)
 class Device:
-  id: int
+  identifier: int
   num_channels: int
   channels: Tuple[Channel, ...]
 
@@ -216,7 +217,7 @@ class Device_data(MoCapData):
   devices_d: Dict[int, Device] = field(init=False)
   
   def __post_init__(self):
-    object.__setattr__(self, "devices_d", { instance.id : instance for instance in self.devices})
+    object.__setattr__(self, "devices_d", { instance.identifier : instance for instance in self.devices})
 
 @dataclass(slots=True)
 class Frame_suffix:
@@ -244,11 +245,8 @@ class MoCap:
   suffix_data: Frame_suffix
   asset_data: Asset_data | None = None
 
-class Descriptor:
-  ...
-
 @dataclass(slots=True)
-class Marker_set_description(Descriptor):
+class Marker_set_description:
   name: str
   num_markers:int
   markers_names: Tuple[str, ...]
@@ -256,13 +254,13 @@ class Marker_set_description(Descriptor):
 @dataclass(slots=True)
 class RB_marker:
   name:str
-  id: int
+  identifier: int
   pos: Position
 
 @dataclass(slots=True)
-class Rigid_body_description(Descriptor):
+class Rigid_body_description:
   name: str
-  id: int
+  identifier: int
   parent_id: int
   pos: Position
   num_markers:int
@@ -270,22 +268,22 @@ class Rigid_body_description(Descriptor):
   markers_d: Dict[int, RB_marker] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "markers_d", { instance.id : instance for instance in self.markers})
+    object.__setattr__(self, "markers_d", { instance.identifier : instance for instance in self.markers})
 
 @dataclass(slots=True)
-class Skeleton_description(Descriptor):
+class Skeleton_description:
   name: str
-  id: int
+  identifier: int
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body_description, ...]
   rigid_bodies_d: Dict[int, Rigid_body_description] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
 
 @dataclass(slots=True)
-class Force_plate_description(Descriptor):
-  id:int
+class Force_plate_description:
+  identifier:int
   serial_number: str
   dimensions: Tuple[float, float]
   origin: Position
@@ -297,8 +295,8 @@ class Force_plate_description(Descriptor):
   channels: Tuple[str, ...]
 
 @dataclass(slots=True)
-class Device_description(Descriptor):
-  id: int
+class Device_description:
+  identifier: int
   name: str
   serial_number: str
   type: int
@@ -307,29 +305,52 @@ class Device_description(Descriptor):
   channels: Tuple[str, ...]
 
 @dataclass(slots=True)
-class Camera_description(Descriptor):
+class Camera_description:
   name: str
   pos: Position
   orientation: Quaternion
 
 @dataclass(slots=True)
-class Marker_description(Descriptor):
+class Marker_description:
   name: str
-  id: int
+  identifier: int
   pos: Position
   size: float
   param: int
 
 @dataclass(slots=True)
-class Asset_description(Descriptor):
+class Asset_description:
   name: str
   type: int
-  id: int
+  identifier: int
   num_rigid_bodies: int
   rigid_bodies: Tuple[Rigid_body_description, ...]
   num_markers: int
-  markers: Tuple
+  markers: Tuple[Marker_description, ...]
   rigid_bodies_d: Dict[int, Rigid_body_description] = field(init=False)
 
   def __post_init__(self):
-    object.__setattr__(self, "rigid_bodies_d", { instance.id : instance for instance in self.rigid_bodies})
+    object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
+
+
+type Descriptor = \
+  Dict[str, Marker_set_description] | \
+  Dict[int, Rigid_body_description] | \
+  Dict[int, Skeleton_description] | \
+  Dict[str, Force_plate_description]  | \
+  Dict[str, Device_description] | \
+  Dict[str, Camera_description] | \
+  Dict[int, Asset_description]
+
+@dataclass(slots=True)
+class Descriptors:
+  """
+    Object for storing descriptions
+  """  
+  marker_set_description: Dict[str, Marker_set_description] = field(init=False, default_factory=dict)
+  rigid_body_description: Dict[int, Rigid_body_description] = field(init=False, default_factory=dict)
+  skeleton_description: Dict[int, Skeleton_description] = field(init=False, default_factory=dict)
+  force_plate_description: Dict[str, Force_plate_description] = field(init=False, default_factory=dict)
+  device_description: Dict[str, Device_description] = field(init=False, default_factory=dict)
+  camera_description: Dict[str, Camera_description] = field(init=False, default_factory=dict)
+  asset_description: Dict[int, Asset_description] = field(init=False, default_factory=dict)

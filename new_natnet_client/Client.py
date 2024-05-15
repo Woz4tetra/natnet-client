@@ -1,22 +1,22 @@
 from dataclasses import dataclass, field, FrozenInstanceError, InitVar, asdict
 from collections import deque
 import struct
-from types import NoneType
-from typing import Any, Tuple, Dict, Callable, Iterator
+from types import NoneType, TracebackType
+from typing import Any, Optional, Tuple, Dict, Callable, Iterator, Type
 import socket
 import logging
 from threading import Thread, Lock
-from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap
+from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptor, Descriptors
 from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
-from copy import copy
+from copy import copy, deepcopy
 import time
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class Server_info:
   application_name: str
-  version: Tuple[int,...]
+  version: Tuple[int, ...]
   nat_net_major: int
   nat_net_minor: int
 
@@ -31,6 +31,7 @@ class NatNetClient:
   max_buffer_size: InitVar[int] = 255
   __mocap_bytes: bytes | None = field(init=False, default=None)
   __new_data_flag: bool = field(init=False, default=False)
+  __descriptors: Descriptors = field(init=False, default_factory=Descriptors)
   __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
   __command_socket: socket.socket | None = field(init=False, repr=False, default=None)
@@ -50,9 +51,8 @@ class NatNetClient:
 
   @property
   def MoCap(self) -> Iterator[MoCap]:
-    if  self.__mocap_bytes is None: return
+    if  self.__mocap_bytes is None: raise StopIteration
     while True:
-      print("adquiring lock")
       with self.__mocap_bytes_lock:
         if self.__new_data_flag:
           yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
@@ -68,19 +68,27 @@ class NatNetClient:
       return self.__server_messages.copy()
 
   @property
-  def buffer_size(self):
+  def buffer_size(self) -> int:
     """
       Buffer size for messages/responses queues
     """
     return self.__max_buffer_size
 
   @buffer_size.setter
-  def buffer_size(self, maxlen:int):
-    self.__max_buffer_size = maxlen
+  def buffer_size(self, max_len: int) -> None:
+    self.__max_buffer_size = max_len
     with self.__server_messages_lock:
-      self.__server_messages = deque(self.__server_messages,maxlen=maxlen)
+      self.__server_messages = deque(self.__server_messages,maxlen=max_len)
     with self.__server_responses_lock:
-      self.__server_responses = deque(self.__server_responses,maxlen=maxlen)
+      self.__server_responses = deque(self.__server_responses,maxlen=max_len)
+
+  @property
+  def frozen_descriptors(self) -> Descriptors:
+    return deepcopy(self.__descriptors)
+  
+  @property
+  def descriptors(self) -> Descriptors:
+    return self.__descriptors
 
   @staticmethod
   def create_socket(ip: str, proto: int, port: int = 0) -> socket.socket | None:
@@ -95,7 +103,7 @@ class NatNetClient:
       logging.error(msg)
       sock.close()
 
-  def __get_message_id(self, data:bytes) -> int:
+  def __get_message_id(self, data: bytes) -> int:
     message_id = int.from_bytes( data[0:2], byteorder='little',  signed=True )
     return message_id
 
@@ -131,7 +139,7 @@ class NatNetClient:
       self.__data_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(self.multicast_address) + socket.inet_aton(self.local_ip_address))
     return True
 
-  def __post_init__(self, max_buffer_size):
+  def __post_init__(self, max_buffer_size: int) -> None:
     self.__running_lock = Lock()
     self.__command_socket_lock = Lock()
     self.__server_info_lock = Lock()
@@ -160,7 +168,7 @@ class NatNetClient:
 
     self.__update_unpacker_version()
 
-  def __setattr__(self, name:str, value:Any):
+  def __setattr__(self, name: str, value: Any) -> None:
     if self.__freeze and name in (
       "server_address",
       "local_ip_address",
@@ -180,15 +188,14 @@ class NatNetClient:
     self.__data_thread.start()
     self.__command_thread = Thread(target=self.__command_thread_function)
     self.__command_thread.start()
+    time.sleep(1) # wait to get threads running for receiving data
     self.send_request(NAT_Messages.CONNECT,"")
-    time.sleep(0.5)
-    return
 
-  def __exit__(self, exc_type, exc_value, traceback) -> None:
+  def __exit__(self, exc_type: Optional[Type[BaseException]], exc_value: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
     if self.__running:
       self.shutdown()
 
-  def send_request(self, NAT_command:NAT_Messages, command:str) -> int:
+  def send_request(self, NAT_command: NAT_Messages, command: str) -> int:
     """
       Send request to server
       
@@ -220,7 +227,7 @@ class NatNetClient:
     with self.__command_socket_lock:
       return self.__command_socket.sendto(data, (self.server_address, self.command_port))
 
-  def send_command(self, command: str):
+  def send_command(self, command: str) -> bool:
     """
       Tries to send the command 3 times
 
@@ -234,7 +241,7 @@ class NatNetClient:
         break
     return res != -1
 
-  def __update_unpacker_version(self):
+  def __update_unpacker_version(self) -> None:
     """
       Changes unpacker version based on server's bit stream version
     """
@@ -242,7 +249,7 @@ class NatNetClient:
     with self.__server_info_lock:
       if (self.__server_info.nat_net_major == 4 and self.__server_info.nat_net_minor >= 1) or self.__server_info.nat_net_major == 0:
         self.__unpacker = DataUnpackerV4_1
-    self.__mapped_data_descriptors: Dict[NAT_Data, Callable[[bytes], Tuple[Dict, int]]] = {
+    self.__mapped_data_descriptors: Dict[NAT_Data, Callable[[bytes], Tuple[Descriptor, int]]] = {
       NAT_Data.MARKER_SET: self.__unpacker.unpack_marker_set_description,
       NAT_Data.RIGID_BODY: self.__unpacker.unpack_rigid_body_description,
       NAT_Data.SKELETON: self.__unpacker.unpack_skeleton_description,
@@ -252,43 +259,63 @@ class NatNetClient:
       NAT_Data.ASSET: self.__unpacker.unpack_asset_description
     }
 
-  def __unpack_mocap_data(self, data:bytes, packet_size:int):
+  def __unpack_mocap_data(self, data: bytes, packet_size: int) -> int:
     with self.__mocap_bytes_lock:
       self.__new_data_flag = True
       self.__mocap_bytes = data
     return packet_size
 
-  def __unpack_data_descriptions(self, data:bytes, packet_size:int):
+  def __unpack_data_descriptions(self, data: bytes, packet_size: int) -> int:
     offset = 0
     dataset_count = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-    for i in range(dataset_count):
-      t = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
+    size_in_bytes = -1
+    for _ in range(dataset_count):
+      tag = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
+      data_description_type = NAT_Data(tag)
       if self.__unpacker == DataUnpackerV4_1:
         size_in_bytes = int.from_bytes( data[offset:(offset:=offset+4)], byteorder='little',  signed=True )
-      data_description_type = NAT_Data(t)
-      if data_description_type == NAT_Data.UNDEFINED:
-        logging.error(f"{data_description_type = } - ID: {t}")
-        continue
-      d, tmp_offset = self.__mapped_data_descriptors[data_description_type](data[offset:])
-      # TODO: Updater de datos
+      match data_description_type:
+        case NAT_Data.MARKER_SET:
+          description, tmp_offset = self.__unpacker.unpack_marker_set_description(data[offset:])
+          self.__descriptors.marker_set_description.update(description)
+        case NAT_Data.RIGID_BODY:
+          description, tmp_offset = self.__unpacker.unpack_rigid_body_description(data[offset:])
+          self.__descriptors.rigid_body_description.update(description)
+        case NAT_Data.SKELETON:
+          description, tmp_offset = self.__unpacker.unpack_skeleton_description(data[offset:])
+          self.__descriptors.skeleton_description.update(description)
+        case NAT_Data.FORCE_PLATE:
+          description, tmp_offset = self.__unpacker.unpack_force_plate_description(data[offset:])
+          self.__descriptors.force_plate_description.update(description)
+        case NAT_Data.DEVICE:
+          description, tmp_offset = self.__unpacker.unpack_device_description(data[offset:])
+          self.__descriptors.device_description.update(description)
+        case NAT_Data.CAMERA:
+          description, tmp_offset = self.__unpacker.unpack_camera_description(data[offset:])
+          self.__descriptors.camera_description.update(description)
+        case NAT_Data.ASSET:
+          description, tmp_offset = self.__unpacker.unpack_asset_description(data[offset:])
+          self.__descriptors.asset_description.update(description)
+        case NAT_Data.UNDEFINED:
+          logging.error(f"ID: {tag} - Size: {size_in_bytes}")
+          continue
       offset += tmp_offset
     return offset
 
-  def __unpack_server_info(self, data: bytes, __:int) -> int:
+  def __unpack_server_info(self, data: bytes, __: int) -> int:
     offset = 0
-    template = {}
     application_name, _, _ = data[offset:(offset:=offset+256)].partition(b'\0')
-    template['application_name'] = str(application_name, "utf-8")
-    template['version'] = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
-    template['nat_net_major'], template['nat_net_minor'], _, _ = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
+    application_name = str(application_name, "utf-8")
+    version = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
+    nat_net_major, nat_net_minor, _, _ = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
     with self.__server_info_lock:
-      self.__server_info = Server_info(**template)
+      self.__server_info = Server_info(application_name, version, nat_net_major, nat_net_minor)
     self.__update_unpacker_version
-    if template['nat_net_major'] >= 4 and self.use_multicast == False:
+    if nat_net_major >= 4 and self.use_multicast == False:
       self.__can_change_bitstream = True
     return offset
 
-  def __unpack_server_response(self, data:bytes, packet_size:int) -> int:
+  def __unpack_server_response(self, data: bytes, packet_size: int) -> int:
     if packet_size == 4:
       with self.__server_responses_lock:
         self.__server_responses.append(int.from_bytes(data, byteorder='little',  signed=True ))
@@ -312,21 +339,21 @@ class NatNetClient:
         self.__server_responses.append(response)
     return len(response)
 
-  def __unpack_server_message(self, data:bytes, __:int):
+  def __unpack_server_message(self, data: bytes, __: int) -> int:
     message, _, _ = data.partition(b'\0')
     with self.__server_messages_lock:
       self.__server_messages.append(str(message, encoding='utf-8'))
     return len(message) + 1
 
-  def __unpack_unrecognized_request(self, _:bytes, packet_size:int) -> int:
+  def __unpack_unrecognized_request(self, _: bytes, packet_size: int) -> int:
     logging.error(f"{NAT_Messages.UNRECOGNIZED_REQUEST} - {packet_size = }")
     return packet_size
 
-  def __unpack_undefined_nat_message(self, _:bytes, packet_size:int) -> int:
+  def __unpack_undefined_nat_message(self, _: bytes, packet_size: int) -> int:
     logging.error(f"{NAT_Messages.UNDEFINED} - {packet_size = }")
     return packet_size
 
-  def __process_message(self, data: bytes):
+  def __process_message(self, data: bytes) -> None:
     offset = 0
     message_id = NAT_Messages(self.__get_message_id(data[offset:(offset:=offset+2)]))
     packet_size = int.from_bytes( data[offset:(offset:=offset+2)], byteorder='little', signed=True)
@@ -375,7 +402,7 @@ class NatNetClient:
         self.__process_message(data)
     logging.info("Command thread stopped")
 
-  def shutdown(self):
+  def shutdown(self) -> None:
     logging.info(f"Shuting down client {self.server_address}")
     with self.__running_lock:
       self.__running = False
@@ -390,5 +417,5 @@ class NatNetClient:
     self.__command_thread.join()
     self.__freeze = False
 
-  def __del__(self):
+  def __del__(self) -> None:
     self.shutdown()
