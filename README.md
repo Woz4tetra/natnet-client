@@ -1,3 +1,8 @@
+[![Poetry](https://img.shields.io/endpoint?url=https://python-poetry.org/badge/v0.json)](https://python-poetry.org/)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/new-natnet-client)
+![PyPI - License](https://img.shields.io/pypi/l/new-natnet-client)
+
+
 This package provides the client for using [Optitrack's](https://optitrack.com/) NatNet tracking system, with type hints for python.
 
 The NatNet SDK is a simple Client/Server networking SDK for sending and receiving
