@@ -6,7 +6,7 @@ from typing import Any, Optional, Tuple, Dict, Callable, Iterator, Type
 import socket
 import logging
 from threading import Thread, Lock
-from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptor, Descriptors
+from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptors
 from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
 from copy import copy, deepcopy
 import time
@@ -249,15 +249,6 @@ class NatNetClient:
     with self.__server_info_lock:
       if (self.__server_info.nat_net_major == 4 and self.__server_info.nat_net_minor >= 1) or self.__server_info.nat_net_major == 0:
         self.__unpacker = DataUnpackerV4_1
-    self.__mapped_data_descriptors: Dict[NAT_Data, Callable[[bytes], Tuple[Descriptor, int]]] = {
-      NAT_Data.MARKER_SET: self.__unpacker.unpack_marker_set_description,
-      NAT_Data.RIGID_BODY: self.__unpacker.unpack_rigid_body_description,
-      NAT_Data.SKELETON: self.__unpacker.unpack_skeleton_description,
-      NAT_Data.FORCE_PLATE: self.__unpacker.unpack_force_plate_description,
-      NAT_Data.DEVICE: self.__unpacker.unpack_device_description,
-      NAT_Data.CAMERA: self.__unpacker.unpack_camera_description,
-      NAT_Data.ASSET: self.__unpacker.unpack_asset_description
-    }
 
   def __unpack_mocap_data(self, data: bytes, packet_size: int) -> int:
     with self.__mocap_bytes_lock:

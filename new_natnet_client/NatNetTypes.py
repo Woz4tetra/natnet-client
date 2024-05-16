@@ -332,16 +332,6 @@ class Asset_description:
   def __post_init__(self):
     object.__setattr__(self, "rigid_bodies_d", { instance.identifier : instance for instance in self.rigid_bodies})
 
-
-type Descriptor = \
-  Dict[str, Marker_set_description] | \
-  Dict[int, Rigid_body_description] | \
-  Dict[int, Skeleton_description] | \
-  Dict[str, Force_plate_description]  | \
-  Dict[str, Device_description] | \
-  Dict[str, Camera_description] | \
-  Dict[int, Asset_description]
-
 @dataclass(slots=True)
 class Descriptors:
   """
