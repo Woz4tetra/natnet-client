@@ -122,7 +122,7 @@ class NatNetClient:
       # set to broadcast mode
       self.__command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     return True
-    
+
   def __create__data_socket(self) -> bool:
     ip = ''
     proto = socket.IPPROTO_UDP
@@ -180,7 +180,7 @@ class NatNetClient:
       raise FrozenInstanceError("This attribute can't be changed because client is already connected")
     super().__setattr__(name, value)
 
-  def __enter__(self) -> None:
+  def connect(self) -> None:
     if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return
     logging.info("Client connected")
     self.__running = True
@@ -190,6 +190,10 @@ class NatNetClient:
     self.__command_thread.start()
     time.sleep(1) # wait to get threads running for receiving data
     self.send_request(NAT_Messages.CONNECT,"")
+
+  def __enter__(self):
+    self.connect()
+    return self
 
   def __exit__(self, exc_type: Optional[Type[BaseException]], exc_value: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
     if self.__running:

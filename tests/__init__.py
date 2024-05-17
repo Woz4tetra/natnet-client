@@ -2,8 +2,7 @@ import time
 from new_natnet_client.Client import NatNetClient
 
 if __name__ == "__main__":
-  client = NatNetClient()
-  with client:
+  with NatNetClient() as client:
     if client.connected:
       print(client.server_info)
       requested_time = time.time_ns()
