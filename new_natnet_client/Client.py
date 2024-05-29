@@ -56,6 +56,9 @@ class NatNetClient:
       with self.__mocap_bytes_lock:
         if self.__new_data_flag:
           yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
+          self.__new_data_flag = False
+        else:
+          return None
 
   @property
   def server_responses(self) -> deque[int | str]:
