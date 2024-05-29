@@ -32,6 +32,7 @@ class NatNetClient:
   max_buffer_size: InitVar[int] = 255
   __mocap_bytes: bytes | None = field(init=False, default=None)
   __last_new_data_time: int = field(init=False, default=0)
+  __new_data_flag: bool = field(init=False, default=False)
   __descriptors: Descriptors = field(init=False, default_factory=Descriptors)
   __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
@@ -51,15 +52,23 @@ class NatNetClient:
       return copy(self.__server_info)
 
   @property
+  def last_mocap_data(self) -> None | MoCap:
+    if  self.__mocap_bytes is None:
+      return None
+    return self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
+
+  @property
   def MoCap(self) -> Iterator[MoCap]:
     if  self.__mocap_bytes is None: raise StopIteration
     while True:
       with self.__mocap_bytes_lock:
-        yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
-  
+        if self.__new_data_flag:
+          yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
+          self.__new_data_flag = False
+
   @property
   def last_new_data_time(self):
-    return self.__last_new_data_time  
+    return self.__last_new_data_time
 
   @property
   def server_responses(self) -> deque[int | str]:
@@ -261,6 +270,7 @@ class NatNetClient:
   def __unpack_mocap_data(self, data: bytes, packet_size: int) -> int:
     self.__last_new_data_time = time.time_ns()
     with self.__mocap_bytes_lock:
+      self.__new_data_flag = True
       self.__mocap_bytes = data
     return packet_size
 
