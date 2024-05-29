@@ -6,10 +6,11 @@ from typing import Any, Optional, Tuple, Dict, Callable, Iterator, Type
 import socket
 import logging
 from threading import Thread, Lock
-from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptors
-from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
 from copy import copy, deepcopy
 import time
+
+from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptors
+from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -30,7 +31,7 @@ class NatNetClient:
   data_port: int = 1511
   max_buffer_size: InitVar[int] = 255
   __mocap_bytes: bytes | None = field(init=False, default=None)
-  __new_data_flag: bool = field(init=False, default=False)
+  __last_new_data_time: int = field(init=False, default=0)
   __descriptors: Descriptors = field(init=False, default_factory=Descriptors)
   __can_change_bitstream: bool = field(init=False, default=False)
   __running: bool = field(init=False, default=False)
@@ -54,11 +55,11 @@ class NatNetClient:
     if  self.__mocap_bytes is None: raise StopIteration
     while True:
       with self.__mocap_bytes_lock:
-        if self.__new_data_flag:
-          yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
-          self.__new_data_flag = False
-        else:
-          return None
+        yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
+  
+  @property
+  def last_new_data_time(self):
+    return self.__last_new_data_time  
 
   @property
   def server_responses(self) -> deque[int | str]:
@@ -258,8 +259,8 @@ class NatNetClient:
         self.__unpacker = DataUnpackerV4_1
 
   def __unpack_mocap_data(self, data: bytes, packet_size: int) -> int:
+    self.__last_new_data_time = time.time_ns()
     with self.__mocap_bytes_lock:
-      self.__new_data_flag = True
       self.__mocap_bytes = data
     return packet_size
 
