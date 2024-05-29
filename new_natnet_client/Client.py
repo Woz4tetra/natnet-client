@@ -381,12 +381,15 @@ class NatNetClient:
     logging.info("Command thread start")
     recv_buffer_size=64*1024
     run = True
+    keep_alive = b'\n\x00\x00\x00\x00'
     while run:
       with self.__running_lock:
         run = self.__running
       try:
         with self.__command_socket_lock:
           if self.__command_socket is None: return
+          if not self.use_multicast:
+            self.__command_socket.sendto(keep_alive, (self.server_address, self.command_port))
           data = self.__command_socket.recv(recv_buffer_size)
       except socket.timeout:
         data = bytes()
