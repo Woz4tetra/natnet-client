@@ -60,11 +60,11 @@ class Quaternion(Data):
   w: float
   roll: float = field(init=False, default=0.0)
   pitch: float = field(init=False, default=0.0)
-  jaw: float = field(init=False, default=0.0)
+  yaw: float = field(init=False, default=0.0)
   def __post_init__(self):
     object.__setattr__(self, "roll", atan2(2*(self.w*self.x + self.y*self.z), 1-2*(self.x**2 + self.y**2)))
     object.__setattr__(self, "pitch", asin(2*(self.w*self.y - self.x*self.z)))
-    object.__setattr__(self, "jaw", atan2(2*(self.w*self.z + self.x*self.y), 1-2*(self.y**2 + self.z**2)))
+    object.__setattr__(self, "yaw", atan2(2*(self.w*self.z + self.x*self.y), 1-2*(self.y**2 + self.z**2)))
   @classmethod
   def unpack(cls, data:bytes):
     return cls(*(struct.unpack('<ffff', data)))
