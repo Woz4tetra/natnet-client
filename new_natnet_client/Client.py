@@ -1,433 +1,592 @@
-from dataclasses import dataclass, field, FrozenInstanceError, InitVar, asdict
+from dataclasses import dataclass, field, asdict, InitVar
 from collections import deque
 import struct
-from types import NoneType, TracebackType
-from typing import Any, Optional, Tuple, Dict, Callable, Iterator, Type
+from typing import Tuple, ClassVar, Generator, AsyncGenerator, Protocol
 import socket
 import logging
-from threading import Thread, Lock
-from copy import copy, deepcopy
+import threading
+import asyncio
 import time
 
-from new_natnet_client.NatNetTypes import NAT_Messages, NAT_Data, MoCap, Descriptors
-from new_natnet_client.Unpackers import DataUnpackerV3_0, DataUnpackerV4_1
+import new_natnet_client.NatNetTypes as NNT
+import new_natnet_client.Unpackers as Unpackers
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-@dataclass(slots=True)
-class Server_info:
-  application_name: str
-  version: Tuple[int, ...]
-  nat_net_major: int
-  nat_net_minor: int
+@dataclass(slots=True, frozen=True)
+class ServerInfo:
+    application_name: str
+    version: Tuple[int, ...]
+    nat_net_major: int
+    nat_net_minor: int
 
-@dataclass(kw_only=True)
-class NatNetClient:
-  server_address: str = "127.0.0.1"
-  local_ip_address: str = "127.0.0.1"
-  use_multicast: bool = True
-  multicast_address: str ="239.255.42.99"
-  command_port: int = 1510
-  data_port: int = 1511
-  max_buffer_size: InitVar[int] = 255
-  __mocap_bytes: bytes | None = field(init=False, default=None)
-  __last_new_data_time: int = field(init=False, default=0)
-  __new_data_flag: bool = field(init=False, default=False)
-  __descriptors: Descriptors = field(init=False, default_factory=Descriptors)
-  __can_change_bitstream: bool = field(init=False, default=False)
-  __running: bool = field(init=False, default=False)
-  __command_socket: socket.socket | None = field(init=False, repr=False, default=None)
-  __data_socket: socket.socket | None = field(init=False, repr=False, default=None)
-  __freeze: bool = field(init=False, repr=False, default=False)
 
-  # TODO: Add bitstream change support
-
-  @property
-  def connected(self) -> bool:
-    return self.__running
-
-  @property
-  def server_info(self) -> Server_info:
-    with self.__server_info_lock:
-      return copy(self.__server_info)
-
-  @property
-  def last_mocap_data(self) -> None | MoCap:
-    if  self.__mocap_bytes is None:
-      return None
-    return self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
-
-  @property
-  def MoCap(self) -> Iterator[MoCap]:
-    if  self.__mocap_bytes is None: raise StopIteration
-    while True:
-      with self.__mocap_bytes_lock:
-        if self.__new_data_flag:
-          yield self.__unpacker.unpack_mocap_data(self.__mocap_bytes)
-          self.__new_data_flag = False
-
-  @property
-  def last_new_data_time(self):
-    return self.__last_new_data_time
-
-  @property
-  def server_responses(self) -> deque[int | str]:
-    with self.__server_responses_lock:
-      return self.__server_responses.copy()
-
-  @property
-  def server_messages(self) -> deque[str]:
-    with self.__server_messages_lock:
-      return self.__server_messages.copy()
-
-  @property
-  def buffer_size(self) -> int:
+@dataclass(slots=True, frozen=True, kw_only=True)
+class NatNetParams:
     """
-      Buffer size for messages/responses queues
+    This class represents an example dataclass.
+
+    Args:
+        server_address: (str, optional). Defaults to "127.0.0.1"
+        local_ip_address: (str, optional). Defaults to "127.0.0.1"
+        use_multicast: (bool, optional). Defaults to True
+        multicast_address: (str, optional). Defaults to "239.255.42.99"
+        command_port: (int, optional). Defaults to 1510
+        data_port: (int, optional). Defaults to 1511
+
+        max_buffer_size: (int | None, optional). Size for server responses and messages buffers. Defaults to None
+        connection_timeout: (float | None, optional). Time to wait for the server to send back its ServerInfo when using a context, passed to `NatNetClient.connect`. Defaults to None
     """
-    return self.__max_buffer_size
 
-  @buffer_size.setter
-  def buffer_size(self, max_len: int) -> None:
-    self.__max_buffer_size = max_len
-    with self.__server_messages_lock:
-      self.__server_messages = deque(self.__server_messages,maxlen=max_len)
-    with self.__server_responses_lock:
-      self.__server_responses = deque(self.__server_responses,maxlen=max_len)
+    server_address: str = "127.0.0.1"
+    local_ip_address: str = "127.0.0.1"
+    use_multicast: bool = True
+    multicast_address: str = "239.255.42.99"
+    command_port: int = 1510
+    data_port: int = 1511
 
-  @property
-  def frozen_descriptors(self) -> Descriptors:
-    return deepcopy(self.__descriptors)
-  
-  @property
-  def descriptors(self) -> Descriptors:
-    return self.__descriptors
+    max_buffer_size: int | None = None
+    connection_timeout: float | None = None
 
-  @staticmethod
-  def create_socket(ip: str, proto: int, port: int = 0) -> socket.socket | None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, proto)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-      # Connect to the IP with a dynamically assigned port
-      sock.bind((ip, port))
-      sock.settimeout(3)
-      return sock
-    except socket.error as msg:
-      logging.error(msg)
-      sock.close()
 
-  def __get_message_id(self, data: bytes) -> int:
-    message_id = int.from_bytes( data[0:2], byteorder='little',  signed=True )
-    return message_id
+class NatNetClientI(Protocol):
+    @property
+    def params(self) -> NatNetParams: ...
+    @property
+    def server_info(self) -> ServerInfo: ...
+    @property
+    def last_new_data_time(self) -> int:
+        """Time when last mocap data was received, set using time.time_ns
 
-  def __create__command_socket(self) -> bool:
-    ip = self.local_ip_address
-    proto = socket.IPPROTO_UDP
-    if self.use_multicast:
-      ip = ''
-      # Let system decide protocol
-      proto = 0
-    self.__command_socket = self.create_socket(ip, proto)
-    if type(self.__command_socket) == NoneType:
-      logging.info(f"Command socket. Check Motive/Server mode requested mode agreement.  {self.use_multicast = } ")
-      return False
-    if self.use_multicast:
-      # set to broadcast mode
-      self.__command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    return True
+        Returns:
+            int: time
+        """
+        ...
 
-  def __create__data_socket(self) -> bool:
-    ip = ''
-    proto = socket.IPPROTO_UDP
-    port = 0
-    if self.use_multicast:
-      ip = self.local_ip_address
-      proto = 0
-      port = self.data_port
-    self.__data_socket = self.create_socket(ip, proto, port)
-    if type(self.__data_socket) == NoneType:
-      logging.info(f"Data socket. Check Motive/Server mode requested mode agreement.  {self.use_multicast = } ")
-      return False
-    if self.use_multicast or self.multicast_address != "255.255.255.255":
-      self.__data_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(self.multicast_address) + socket.inet_aton(self.local_ip_address))
-    return True
+    @property
+    def last_mocap_data(self) -> None | NNT.MoCap:
+        """last mocap data received
 
-  def __post_init__(self, max_buffer_size: int) -> None:
-    self.__running_lock = Lock()
-    self.__command_socket_lock = Lock()
-    self.__server_info_lock = Lock()
-    self.__server_responses_lock = Lock()
-    self.__server_messages_lock = Lock()
-    self.__mocap_bytes_lock = Lock()
+        Returns:
+            None|NatNetTypes.MoCap: MoCap data or None if no data has been received
+        """
+        ...
 
-    self.__max_buffer_size = max_buffer_size
-    # Buffer for server responses
-    self.__server_responses: deque[int | str] = deque(maxlen=self.__max_buffer_size)
-    # Buffer for server messages
-    self.__server_messages: deque[str] = deque(maxlen=self.__max_buffer_size)
+    @property
+    def server_responses(self) -> deque[int | str]:
+        """server responses
 
-    self.__server_info: Server_info = Server_info("None", (0,0,0,0), 0,0)
-    
-    # Map unpacking methods with respective messages
-    self.__mapped: Dict[NAT_Messages, Callable[[bytes,int], int] ] = {
-      NAT_Messages.FRAME_OF_DATA: self.__unpack_mocap_data,
-      NAT_Messages.MODEL_DEF: self.__unpack_data_descriptions,
-      NAT_Messages.SERVER_INFO: self.__unpack_server_info,
-      NAT_Messages.RESPONSE: self.__unpack_server_response,
-      NAT_Messages.MESSAGE_STRING: self.__unpack_server_message,
-      NAT_Messages.UNRECOGNIZED_REQUEST: self.__unpack_unrecognized_request,
-      NAT_Messages.UNDEFINED: self.__unpack_undefined_nat_message
-    }
+        Returns:
+            deque[int|str]: copy of the internal server responses buffer
+        """
+        ...
 
-    self.__update_unpacker_version()
+    @property
+    def server_messages(self) -> deque[str]:
+        """server messages
 
-  def __setattr__(self, name: str, value: Any) -> None:
-    if self.__freeze and name in (
-      "server_address",
-      "local_ip_address",
-      "use_multicast",
-      "multicast_address",
-      "command_port",
-      "data_port",
-    ):
-      raise FrozenInstanceError("This attribute can't be changed because client is already connected")
-    super().__setattr__(name, value)
+        Returns:
+            deque[str]: copy of the internal server messages buffer
+        """
+        ...
 
-  def connect(self) -> None:
-    if self.__running or not self.__create__command_socket() or not self.__create__data_socket(): return
-    logging.info("Client connected")
-    self.__running = True
-    self.__data_thread = Thread(target=self.__data_thread_function)
-    self.__data_thread.start()
-    self.__command_thread = Thread(target=self.__command_thread_function)
-    self.__command_thread.start()
-    time.sleep(1) # wait to get threads running for receiving data
-    self.send_request(NAT_Messages.CONNECT,"")
+    @property
+    def descriptors(self) -> NNT.Descriptors | None: ...
+    def MoCap(self, timeout: float | None = None) -> Generator[NNT.MoCap, None, None]:
+        """A generator used for iterating over new motion capture data received
 
-  def __enter__(self):
-    self.connect()
-    return self
+        Args:
+            timeout (float|None, optional): If no new data is received in a period of timeout the generator will stop. Defaults to None.
 
-  def __exit__(self, exc_type: Optional[Type[BaseException]], exc_value: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
-    if self.__running:
-      self.shutdown()
+        Yields:
+            Generator[NNT.MoCap,None,None]: Generator used for iterating
 
-  def send_request(self, NAT_command: NAT_Messages, command: str) -> int:
-    """
-      Send request to server
-      
-      Returns:
-      ---
-        int: number of bytes send, (-1) if something went wrong
-    """
-    if type(self.__command_socket) == NoneType or NAT_command == NAT_Messages.UNDEFINED: return -1
-    packet_size: int = 0
-    if  NAT_command == NAT_Messages.KEEP_ALIVE or \
-        NAT_command == NAT_Messages.REQUEST_MODEL_DEF or \
-        NAT_command == NAT_Messages.REQUEST_FRAME_OF_DATA:
-      command = ""
-    elif NAT_command == NAT_Messages.REQUEST:
-      packet_size = len(command) + 1
-    elif NAT_command == NAT_Messages.CONNECT:
-      tmp_version = [4,1,0,0]
-      command = ("Ping".ljust(265, '\x00') + \
-                  chr(tmp_version[0]) + \
-                  chr(tmp_version[1]) + \
-                  chr(tmp_version[2]) + \
-                  chr(tmp_version[3]) + \
-                  '\x00')
-      packet_size = len(command) + 1
-    data = NAT_command.value.to_bytes(2, byteorder="little", signed=True)
-    data += packet_size.to_bytes(2, byteorder='little',  signed=True)
-    data += command.encode("utf-8")
-    data += b'\0'
-    with self.__command_socket_lock:
-      return self.__command_socket.sendto(data, (self.server_address, self.command_port))
+        Example:
+            >>> with NatNetClient(NatNetParams(...)) as client:
+            >>>     if client is not None:
+            >>>         for frame in client.MoCap():
+            >>>             print(frame)
+        """
+        ...
 
-  def send_command(self, command: str) -> bool:
-    """
-      Tries to send the command 3 times
+    async def MoCapAsync(
+        self, timeout: float | None = None
+    ) -> AsyncGenerator[NNT.MoCap, None]:
+        """The async version of MoCap
 
-      Returns:
-        bool: whether the was send successfully
-    """
-    res:int = -1
-    for _ in range(3):
-      res = self.send_request(NAT_Messages.REQUEST, command)
-      if res != -1:
-        break
-    return res != -1
+        Args:
+            timeout (float|None, optional): If no new data is received in a period of timeout the generator will stop. Defaults to None.
 
-  def __update_unpacker_version(self) -> None:
-    """
-      Changes unpacker version based on server's bit stream version
-    """
-    self.__unpacker = DataUnpackerV3_0
-    with self.__server_info_lock:
-      if (self.__server_info.nat_net_major == 4 and self.__server_info.nat_net_minor >= 1) or self.__server_info.nat_net_major == 0:
-        self.__unpacker = DataUnpackerV4_1
+        Returns:
+            AsyncGenerator[NNT.MoCap, None]: Async generator used for iterating
 
-  def __unpack_mocap_data(self, data: bytes, packet_size: int) -> int:
-    self.__last_new_data_time = time.time_ns()
-    with self.__mocap_bytes_lock:
-      self.__new_data_flag = True
-      self.__mocap_bytes = data
-    return packet_size
+        Raises:
+            asyncio.InvalidStateError: If you try to use the same client over 2 different event loops at the same time
 
-  def __unpack_data_descriptions(self, data: bytes, packet_size: int) -> int:
-    offset = 0
-    dataset_count = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-    size_in_bytes = -1
-    for _ in range(dataset_count):
-      tag = int.from_bytes(data[offset:(offset:=offset+4)], byteorder='little', signed=True)
-      data_description_type = NAT_Data(tag)
-      if self.__unpacker == DataUnpackerV4_1:
-        size_in_bytes = int.from_bytes( data[offset:(offset:=offset+4)], byteorder='little',  signed=True )
-      match data_description_type:
-        case NAT_Data.MARKER_SET:
-          description, tmp_offset = self.__unpacker.unpack_marker_set_description(data[offset:])
-          self.__descriptors.marker_set_description.update(description)
-        case NAT_Data.RIGID_BODY:
-          description, tmp_offset = self.__unpacker.unpack_rigid_body_description(data[offset:])
-          self.__descriptors.rigid_body_description.update(description)
-        case NAT_Data.SKELETON:
-          description, tmp_offset = self.__unpacker.unpack_skeleton_description(data[offset:])
-          self.__descriptors.skeleton_description.update(description)
-        case NAT_Data.FORCE_PLATE:
-          description, tmp_offset = self.__unpacker.unpack_force_plate_description(data[offset:])
-          self.__descriptors.force_plate_description.update(description)
-        case NAT_Data.DEVICE:
-          description, tmp_offset = self.__unpacker.unpack_device_description(data[offset:])
-          self.__descriptors.device_description.update(description)
-        case NAT_Data.CAMERA:
-          description, tmp_offset = self.__unpacker.unpack_camera_description(data[offset:])
-          self.__descriptors.camera_description.update(description)
-        case NAT_Data.ASSET:
-          description, tmp_offset = self.__unpacker.unpack_asset_description(data[offset:])
-          self.__descriptors.asset_description.update(description)
-        case NAT_Data.UNDEFINED:
-          logging.error(f"ID: {tag} - Size: {size_in_bytes}")
-          continue
-      offset += tmp_offset
-    return offset
+        Example:
+        >>> async def main():
+        >>>     with NatNetClient(NatNetParams(...)) as client:
+        >>>         if client is None:return
+        >>>         async for frame in client.MoCap():
+        >>>             print(frame)
+        >>> asyncio.run(main())
+        """
+        ...
 
-  def __unpack_server_info(self, data: bytes, __: int) -> int:
-    offset = 0
-    application_name, _, _ = data[offset:(offset:=offset+256)].partition(b'\0')
-    application_name = str(application_name, "utf-8")
-    version = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
-    nat_net_major, nat_net_minor, _, _ = struct.unpack( 'BBBB', data[offset:(offset:=offset+4)] )
-    with self.__server_info_lock:
-      self.__server_info = Server_info(application_name, version, nat_net_major, nat_net_minor)
-    self.__update_unpacker_version
-    if nat_net_major >= 4 and self.use_multicast == False:
-      self.__can_change_bitstream = True
-    return offset
+    def connect(self, timeout: float | None = None) -> bool:
+        """Tries to connect to the NatNetServer, sends a CONNECT request to the server
 
-  def __unpack_server_response(self, data: bytes, packet_size: int) -> int:
-    if packet_size == 4:
-      with self.__server_responses_lock:
-        self.__server_responses.append(int.from_bytes(data, byteorder='little',  signed=True ))
-      return 4
-    response, _, _ = data[:256].partition(b'\0')
-    if len(response) < 30:
-      response = response.decode('utf-8')
-      if response.startswith('Bitstream'):
-        messageList = response.split(',')
-        if len(messageList) > 1 and messageList[0] == 'Bitstream':
-          nn_version = messageList[1].split('.')
-          with self.__server_info_lock:
-            template = asdict(self.__server_info)
-          if len(nn_version) > 1:
-            template["nat_net_major"] = int(nn_version[0])
-            template["nat_net_minor"] = int(nn_version[1])
-            with self.__server_info_lock:
-              self.__server_info = Server_info(**template)
-            self.__update_unpacker_version()
-      with self.__server_responses_lock:
-        self.__server_responses.append(response)
-    return len(response)
+        Args:
+            timeout (float|None, optional): Time to wait for the server to send back its ServerInfo. Defaults to None.
 
-  def __unpack_server_message(self, data: bytes, __: int) -> int:
-    message, _, _ = data.partition(b'\0')
-    with self.__server_messages_lock:
-      self.__server_messages.append(str(message, encoding='utf-8'))
-    return len(message) + 1
+        Returns:
+            bool: whether the ServerInfo was received before the
+        """
+        ...
 
-  def __unpack_unrecognized_request(self, _: bytes, packet_size: int) -> int:
-    logging.error(f"{NAT_Messages.UNRECOGNIZED_REQUEST} - {packet_size = }")
-    return packet_size
+    def shutdown(self) -> None:
+        """Closes the connection made before
 
-  def __unpack_undefined_nat_message(self, _: bytes, packet_size: int) -> int:
-    logging.error(f"{NAT_Messages.UNDEFINED} - {packet_size = }")
-    return packet_size
+        Raises:
+            RuntimeError. If there is no connection
+        """
+        ...
 
-  def __process_message(self, data: bytes) -> None:
-    offset = 0
-    message_id = NAT_Messages(self.__get_message_id(data[offset:(offset:=offset+2)]))
-    packet_size = int.from_bytes( data[offset:(offset:=offset+2)], byteorder='little', signed=True)
-    if message_id not in self.__mapped:
-      return
-    self.__mapped[message_id](data[offset:], packet_size)
+    def send_request(self, NAT_command: NNT.NAT_Messages, command: str) -> int:
+        """send request to the server
 
-  def __data_thread_function(self) -> None:
-    data = bytes()
-    logging.info("Data thread start")
-    recv_buffer_size=64*1024
-    run = True
-    while run:
-      with self.__running_lock:
-        run = self.__running
-      try:
-        if self.__data_socket is None: return
-        data = self.__data_socket.recv(recv_buffer_size)
-      except socket.timeout:
-        pass
-      except socket.error as msg:
-        logging.error(f"Data thread {self.local_ip_address}: {msg}")
+        Args:
+            NAT_command (NNT.NAT_Messages): Message type
+            command (str): Command to send
+
+        Returns:
+            int: data send by the socket
+
+        Raises:
+            RuntimeError. If there is no connection or the NAT_Message is UNDEFINED
+        """
+        ...
+
+    def send_command(self, command: str) -> bool:
+        """send an string command with 3 tries
+
+        Args:
+            command (str): Command to send
+
+        Returns:
+            bool: whether sending the command was successful
+        """
+        ...
+
+
+@dataclass
+class NatNetClient(NatNetClientI):
+    logger: ClassVar[logging.Logger] = logging.getLogger("NatNet")
+
+    init_params: InitVar[NatNetParams]
+
+    _server_info: ServerInfo = field(init=False)
+    _command_socket: socket.socket = field(init=False, repr=False)
+    _data_socket: socket.socket = field(init=False, repr=False)
+    _bg_thread: threading.Thread = field(init=False)
+    _loop: asyncio.AbstractEventLoop = field(init=False)
+    _ready: threading.Event = field(init=False, default_factory=threading.Event)
+    _server_ready: threading.Event = field(init=False, default_factory=threading.Event)
+    # _server_ready_async: asyncio.Event = field(init=False, default_factory=asyncio.Event)
+    _stop: asyncio.Event = field(init=False, default_factory=asyncio.Event)
+
+    _server_responses_lock: threading.Lock = field(
+        init=False, default_factory=threading.Lock
+    )
+    _server_messages_lock: threading.Lock = field(
+        init=False, default_factory=threading.Lock
+    )
+
+    # Motion capture values synchronization
+    _last_new_data_time: int = field(init=False, default=-1)
+    _mocap: NNT.MoCap | None = field(init=False, default=None)
+    _mocap_synchronous_event: threading.Event = field(
+        init=False, default_factory=threading.Event
+    )
+    _mocap_loop: asyncio.AbstractEventLoop | None = field(init=False, default=None)
+    _mocap_asynchronous_event: asyncio.Event = field(
+        init=False, default_factory=asyncio.Event
+    )
+
+    _descriptors: NNT.Descriptors | None = field(init=False, default=None)
+    _can_change_bitstream: bool = field(init=False, default=False)
+
+    def __post_init__(self, init_params: NatNetParams) -> None:
+        self._params = init_params
+        self._server_responses_lock = threading.Lock()
+        self._server_messages_lock = threading.Lock()
+        self._server_responses: deque[int | str] = deque(
+            maxlen=self._params.max_buffer_size
+        )
+        self._server_messages: deque[str] = deque(maxlen=self._params.max_buffer_size)
+
+    # TODO: Add bitstream change support
+
+    @property
+    def params(self) -> NatNetParams:
+        return self._params
+
+    @property
+    def server_info(self) -> ServerInfo:
+        return self._server_info
+
+    @property
+    def last_new_data_time(self) -> int:
+        return self._last_new_data_time
+
+    @property
+    def last_mocap_data(self) -> None | NNT.MoCap:
+        return self._mocap
+
+    @property
+    def server_responses(self) -> deque[int | str]:
+        with self._server_responses_lock:
+            return self._server_responses.copy()
+
+    @property
+    def server_messages(self) -> deque[str]:
+        with self._server_messages_lock:
+            return self._server_messages.copy()
+
+    @property
+    def descriptors(self) -> NNT.Descriptors | None:
+        return self._descriptors
+
+    def MoCap(self, timeout: float | None = None) -> Generator[NNT.MoCap, None, None]:
+        while self._mocap_synchronous_event.wait(timeout):
+            yield self._mocap  # type: ignore
+            self._mocap_synchronous_event.clear()
+
+    async def MoCapAsync(
+        self, timeout: float | None = None
+    ) -> AsyncGenerator[NNT.MoCap, None]:
+        if self._mocap_loop is None:
+            asyncio.InvalidStateError("Only one event loop can read at a time")
+        self._mocap_loop = asyncio.get_running_loop()
+        try:
+            while await asyncio.wait_for(
+                self._mocap_asynchronous_event.wait(), timeout
+            ):
+                yield self._mocap  # type: ignore
+                self._mocap_asynchronous_event.clear()
+        except asyncio.TimeoutError:
+            return
+        finally:
+            self._mocap_loop = None
+            self._mocap_asynchronous_event.clear()
+
+    @staticmethod
+    def create_socket(ip: str, proto: int, port: int = 0) -> socket.socket | None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, proto)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            # Connect to the IP with a dynamically assigned port
+            sock.bind((ip, port))
+            sock.setblocking(False)
+            return sock
+        except socket.error as msg:
+            NatNetClient.logger.error(msg)
+            sock.close()
+            return None
+
+    def _create_command_socket(self) -> None:
+        ip = self._params.local_ip_address
+        proto = socket.IPPROTO_UDP
+        if self._params.use_multicast:
+            ip = ""
+            # Let system decide protocol
+            proto = 0
+        self._command_socket = self.create_socket(ip, proto)  # type: ignore
+        if self._command_socket is None:
+            self.logger.error(
+                "Error while creating command socket.\nCheck Motive/Server mode requested mode agreement.\n%s",
+                self._params,
+            )
+            return
+        if self._params.use_multicast:
+            # set to broadcast mode
+            self._command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    def _create_data_socket(self) -> None:
+        ip = ""
+        proto = socket.IPPROTO_UDP
+        port = 0
+        if self._params.use_multicast:
+            ip = self._params.local_ip_address
+            proto = 0
+            port = self._params.data_port
+        self._data_socket = self.create_socket(ip, proto, port)  # type: ignore
+        if self._data_socket is None:
+            self.logger.error(
+                "Error while creating data socket.\nCheck Motive/Server mode requested mode agreement.\n%s",
+                self._params,
+            )
+            return
+        if (
+            self._params.use_multicast
+            or self._params.multicast_address != "255.255.255.255"
+        ):
+            self._data_socket.setsockopt(
+                socket.IPPROTO_IP,
+                socket.IP_ADD_MEMBERSHIP,
+                socket.inet_aton(self._params.multicast_address)
+                + socket.inet_aton(self._params.local_ip_address),
+            )
+
+    async def _start_data(self):
+        asyncio.create_task(self._data_task())
+        if not self._params.use_multicast:
+            asyncio.create_task(self._keep_alive_task())
+
+    def connect(self, timeout: float | None = None) -> bool:
+        if self._ready.is_set():
+            raise RuntimeError("You are already connected")
+        self._create_command_socket()
+        if self._command_socket is None:
+            return False
+        self.logger.debug("command socket created")
+        self._create_data_socket()
+        if self._data_socket is None:
+            self._command_socket.close()
+            return False
+        self.logger.debug("data socket created")
+        self.logger.info("Client connected")
+        self._bg_thread = threading.Thread(
+            target=asyncio.run, args=(self._main_task(),)
+        )
+        self._bg_thread.start()
+        self._ready.wait()
+        self.send_request(NNT.NAT_Messages.CONNECT, "")
+        connected = self._server_ready.wait(timeout)
+        if not connected:
+            self.shutdown()
+        else:
+            asyncio.run_coroutine_threadsafe(self._start_data(), self._loop)
+        return connected
+
+    def shutdown(self) -> None:
+        if not self._ready.is_set():
+            raise RuntimeError("You are not connected")
+        self.logger.info("Shuting down client")
+        self._ready.clear()
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._bg_thread.join()
+        self._command_socket.close()
+        self._data_socket.close()
+        self._server_ready.clear()
+        self.logger.info("Client shutdown")
+
+    def __enter__(self) -> NatNetClientI | None:
+        if not self.connect(self._params.connection_timeout):
+            return None
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        if not self._ready.is_set():
+            return
+        self.shutdown()
+
+    async def _send_request(self, data: bytes) -> int:
+        return await self._loop.sock_sendto(
+            self._command_socket,
+            data,
+            (self._params.server_address, self._params.command_port),
+        )
+
+    def send_request(self, NAT_command: NNT.NAT_Messages, command: str) -> int:
+        if not self._ready.is_set():
+            raise RuntimeError("You are not connected")
+        if NAT_command is NNT.NAT_Messages.UNDEFINED:
+            raise RuntimeError("You cannot send an UNDEFINED request")
+        packet_size: int = 0
+        if (
+            NAT_command is NNT.NAT_Messages.KEEP_ALIVE
+            or NAT_command is NNT.NAT_Messages.REQUEST_MODEL_DEF
+            or NAT_command is NNT.NAT_Messages.REQUEST_FRAME_OF_DATA
+        ):
+            command = ""
+        elif NAT_command is NNT.NAT_Messages.REQUEST:
+            packet_size = len(command) + 1
+        elif NAT_command is NNT.NAT_Messages.CONNECT:
+            tmp_version = [4, 1, 0, 0]
+            command = (
+                "Ping".ljust(265, "\x00")
+                + chr(tmp_version[0])
+                + chr(tmp_version[1])
+                + chr(tmp_version[2])
+                + chr(tmp_version[3])
+                + "\x00"
+            )
+        packet_size = len(command) + 1
+        data = NAT_command.value.to_bytes(2, byteorder="little", signed=True)
+        data += packet_size.to_bytes(2, byteorder="little", signed=True)
+        data += command.encode("utf-8")
+        data += b"\0"
+        future = asyncio.run_coroutine_threadsafe(self._send_request(data), self._loop)
+        return future.result()
+
+    def send_command(self, command: str) -> bool:
+        res: int = -1
+        for _ in range(3):
+            res = self.send_request(NNT.NAT_Messages.REQUEST, command)
+            if res != -1:
+                break
+        return res != -1
+
+    def _update_unpacker_version(self) -> None:
+        """
+        Changes unpacker version based on server's bit stream version
+        """
+        self._unpacker = Unpackers.DataUnpackerV3_0
+        if (
+            self._server_info.nat_net_major == 4
+            and self._server_info.nat_net_minor >= 1
+        ) or self._server_info.nat_net_major == 0:
+            self._unpacker = Unpackers.DataUnpackerV4_1
+        self._server_ready.set()
+
+    def _unpack_mocap_data(self, data: bytes, packet_size: int) -> None:
+        self._last_new_data_time = time.time_ns()
+        self._mocap = self._unpacker.unpack_mocap_data(data)
+        self._mocap_synchronous_event.set()
+        if self._mocap_loop is not None:
+            self._mocap_loop.call_soon_threadsafe(self._mocap_asynchronous_event.set)
+
+    def _unpack_data_descriptions(self, data: bytes, packet_size: int) -> None:
+        self._descriptors = self._unpacker.unpack_descriptors(data)
+
+    def _unpack_server_info(self, data: bytes, packet_size: int) -> None:
+        offset = 0
+        application_name_bytes, _, _ = data[
+            offset : (offset := offset + 256)
+        ].partition(b"\0")
+        application_name = str(application_name_bytes, "utf-8")
+        version = struct.unpack("BBBB", data[offset : (offset := offset + 4)])
+        nat_net_major, nat_net_minor, _, _ = struct.unpack(
+            "BBBB", data[offset : (offset := offset + 4)]
+        )
+        self._server_info = ServerInfo(
+            application_name, version, nat_net_major, nat_net_minor
+        )
+        self._update_unpacker_version()
+        if nat_net_major >= 4 and self._params.use_multicast is False:
+            self._can_change_bitstream = True
+
+    def _unpack_server_response(self, data: bytes, packet_size: int) -> None:
+        if packet_size == 4:
+            with self._server_responses_lock:
+                self._server_responses.append(
+                    int.from_bytes(data, byteorder="little", signed=True)
+                )
+            return
+        response_bytes, _, _ = data[:256].partition(b"\0")
+        if len(response_bytes) > 30:
+            return
+        response = response_bytes.decode("utf-8")
+        messageList = response.split(",")
+        if len(messageList) > 1 and messageList[0] == "Bitstream":
+            nn_version = messageList[1].split(".")
+            template = asdict(self._server_info)
+            if len(nn_version) > 1:
+                template["nat_net_major"] = int(nn_version[0])
+                template["nat_net_minor"] = int(nn_version[1])
+                self._server_info = ServerInfo(**template)
+                self._update_unpacker_version()
+        with self._server_responses_lock:
+            self._server_responses.append(response)
+
+    def _unpack_server_message(self, data: bytes, packet_size: int) -> None:
+        message, _, _ = data.partition(b"\0")
+        with self._server_messages_lock:
+            self._server_messages.append(str(message, encoding="utf-8"))
+
+    def _unpack_unrecognized_request(self, _: bytes, packet_size: int) -> None:
+        self.logger.debug(
+            "%s - packet_size: %i", NNT.NAT_Messages.UNRECOGNIZED_REQUEST, packet_size
+        )
+
+    def _unpack_undefined_nat_message(self, _: bytes, packet_size: int) -> None:
+        self.logger.debug(
+            "%s - packet_size: %i", NNT.NAT_Messages.UNDEFINED, packet_size
+        )
+
+    def _process_message(self, data: bytes) -> None:
+        offset = 0
+        message_id = int.from_bytes(
+            data[offset : (offset := offset + 2)], byteorder="little", signed=True
+        )
+        message = NNT.NAT_Messages(message_id)
+        packet_size = int.from_bytes(
+            data[offset : (offset := offset + 2)], byteorder="little", signed=True
+        )
+        if message is NNT.NAT_Messages.FRAME_OF_DATA:
+            self._unpack_mocap_data(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.MODEL_DEF:
+            self._unpack_data_descriptions(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.SERVER_INFO:
+            self._unpack_server_info(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.RESPONSE:
+            self._unpack_server_response(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.MESSAGE_STRING:
+            self._unpack_server_message(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.UNRECOGNIZED_REQUEST:
+            self._unpack_unrecognized_request(data[offset:], packet_size)
+        elif message is NNT.NAT_Messages.UNDEFINED:
+            self._unpack_undefined_nat_message(data[offset:], packet_size)
+
+    async def _main_task(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        asyncio.create_task(self._command_task())
+        self._ready.set()
+        await self._stop.wait()
+
+    async def _data_task(self) -> None:
         data = bytes()
-      if len(data):
-        self.__process_message(data)
-    logging.info("Data thread stopped")
+        self.logger.info("Data task started")
+        recv_buffer_size = 64 * 1024
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    self._loop.sock_recv(self._data_socket, recv_buffer_size), 3
+                )
+            except asyncio.TimeoutError:
+                self.logger.debug("Data socket timeout")
+                data = bytes()
+            except Exception as msg:
+                self.logger.error("Data error %s: %s", self._params, msg)
+                data = bytes()
+            if len(data):
+                self._process_message(data)
 
-  def __command_thread_function(self) -> None:
-    data = bytes()
-    logging.info("Command thread start")
-    recv_buffer_size=64*1024
-    run = True
-    keep_alive = b'\n\x00\x00\x00\x00'
-    while run:
-      with self.__running_lock:
-        run = self.__running
-      try:
-        with self.__command_socket_lock:
-          if self.__command_socket is None: return
-          if not self.use_multicast:
-            self.__command_socket.sendto(keep_alive, (self.server_address, self.command_port))
-          data = self.__command_socket.recv(recv_buffer_size)
-      except socket.timeout:
+    async def _command_task(self) -> None:
         data = bytes()
-      except socket.error as msg:
-        logging.error(f"Command thread {self.local_ip_address}: {msg}")
-        data = bytes()
-      if len(data):
-        self.__process_message(data)
-    logging.info("Command thread stopped")
+        self.logger.info("Command task")
+        recv_buffer_size = 64 * 1024
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    self._loop.sock_recv(self._command_socket, recv_buffer_size), 3
+                )
+            except asyncio.TimeoutError:
+                self.logger.debug("Command socket timeout")
+                data = bytes()
+            except Exception as msg:
+                self.logger.error("Command error %s: %s", self._params, msg)
+                data = bytes()
+            if len(data):
+                self._process_message(data)
 
-  def shutdown(self) -> None:
-    logging.info(f"Shuting down client {self.server_address}")
-    with self.__running_lock:
-      self.__running = False
-    with self.__command_socket_lock:
-      if self.__command_socket is not None:
-        self.__command_socket.close()
-    if self.__data_socket is not None:
-      self.__data_socket.close()
-    self.__command_socket = None
-    self.__data_socket = None
-    self.__data_thread.join()
-    self.__command_thread.join()
-    self.__freeze = False
-
-  def __del__(self) -> None:
-    self.shutdown()
+    async def _keep_alive_task(self) -> None:
+        self.logger.info("Command thread start")
+        keep_alive = b"\n\x00\x00\x00\x00"
+        while True:
+            await self._loop.sock_sendto(
+                self._command_socket,
+                keep_alive,
+                (self._params.server_address, self._params.command_port),
+            )
+            await asyncio.sleep(3)
