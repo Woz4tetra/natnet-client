@@ -285,8 +285,8 @@ class NatNetClient(NatNetClientI):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             # Connect to the IP with a dynamically assigned port
-            sock.bind((ip, port))
             sock.setblocking(False)
+            sock.bind((ip, port))
             return sock
         except socket.error as msg:
             NatNetClient.logger.error(msg)
@@ -297,7 +297,6 @@ class NatNetClient(NatNetClientI):
         ip = self._params.local_ip_address
         proto = socket.IPPROTO_UDP
         if self._params.use_multicast:
-            ip = ""
             # Let system decide protocol
             proto = 0
         self._command_socket = self.create_socket(ip, proto)  # type: ignore
@@ -312,11 +311,10 @@ class NatNetClient(NatNetClientI):
             self._command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     def _create_data_socket(self) -> None:
-        ip = ""
+        ip = "0.0.0.0"
         proto = socket.IPPROTO_UDP
         port = 0
         if self._params.use_multicast:
-            ip = self._params.local_ip_address
             proto = 0
             port = self._params.data_port
         self._data_socket = self.create_socket(ip, proto, port)  # type: ignore
@@ -328,7 +326,6 @@ class NatNetClient(NatNetClientI):
             return
         if (
             self._params.use_multicast
-            or self._params.multicast_address != "255.255.255.255"
         ):
             self._data_socket.setsockopt(
                 socket.IPPROTO_IP,
