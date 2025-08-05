@@ -1,14 +1,20 @@
+import itertools
 from typing import Callable, Iterable, Tuple, Dict
 from collections import deque
 from struct import unpack
-from itertools import batched
 import logging
 
-import new_natnet_client.NatNetTypes as NatNetTypes
+import natnet_client.NatNetTypes as NatNetTypes
 
 
 logger = logging.getLogger("NatNet-Unpacker")
 
+
+def batched(iterable: Iterable[int], n: int) -> Iterable[Tuple[int, ...]]:
+    """Yield successive n-sized chunks from iterable."""
+    it = iter(iterable)
+    while chunk := tuple(itertools.islice(it, n)):
+        yield chunk
 
 class DataUnpackerV3_0:
     rigid_body_lenght: int = 38
