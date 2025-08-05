@@ -1,11 +1,46 @@
 import itertools
-from typing import Callable, Iterable, Tuple, Dict
+from typing import Iterable, Tuple, Dict
 from collections import deque
 from struct import unpack
 import logging
 
-import natnet_client.NatNetTypes as NatNetTypes
-
+from natnet_client.bytes_data import Position, Quaternion
+from natnet_client.mo_cap_data import (
+    FramePrefix,
+    MarkerData,
+    MarkerSetData,
+    LegacyMarkerSetData,
+    RigidBody,
+    RigidBodyData,
+    Skeleton,
+    SkeletonData,
+    AssetRigidBody,
+    AssetMarker,
+    Asset,
+    AssetData,
+    LabeledMarker,
+    LabeledMarkerData,
+    Channel,
+    ForcePlate,
+    ForcePlateData,
+    Device,
+    DeviceData,
+)
+from natnet_client.descriptors import (
+    FrameSuffix,
+    MoCapDescription,
+    MarkerSetDescription,
+    RigidBodyMarker,
+    RigidBodyDescription,
+    SkeletonDescription,
+    ForcePlateDescription,
+    DeviceDescription,
+    CameraDescription,
+    MarkerDescription,
+    AssetDescription,
+    Descriptors,
+)
+from natnet_client.enums import NatData
 
 logger = logging.getLogger("NatNet-Unpacker")
 
@@ -16,21 +51,20 @@ def batched(iterable: Iterable[int], n: int) -> Iterable[Tuple[int, ...]]:
     while chunk := tuple(itertools.islice(it, n)):
         yield chunk
 
+
 class DataUnpackerV3_0:
-    rigid_body_lenght: int = 38
-    marker_lenght: int = 26
-    frame_suffix_lenght: int = 42
+    rigid_body_length: int = 38
+    marker_length: int = 26
+    frame_suffix_length: int = 42
 
     @classmethod
     def unpack_data_size(cls, data: bytes) -> Tuple[int, int]:
         return 0, 0
 
     @classmethod
-    def unpack_frame_prefix_data(
-        cls, data: bytes
-    ) -> Tuple[NatNetTypes.Frame_prefix, int]:
+    def unpack_frame_prefix_data(cls, data: bytes) -> Tuple[FramePrefix, int]:
         offset = 0
-        prefix = NatNetTypes.Frame_prefix(
+        prefix = FramePrefix(
             int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
             )
@@ -38,19 +72,14 @@ class DataUnpackerV3_0:
         return prefix, offset
 
     @classmethod
-    def unpack_marker_set_data(
-        cls, data: bytes
-    ) -> Tuple[NatNetTypes.Marker_set_data, int]:
+    def unpack_marker_set_data(cls, data: bytes) -> Tuple[MarkerSetData, int]:
         offset = 0
         num_marker_sets = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
         _, tmp_offset = cls.unpack_data_size(data)
         offset += tmp_offset
-        markers: deque[NatNetTypes.Marker_data] = deque()
-        position_unpacker: Callable[[Iterable[int]], NatNetTypes.Position] = (
-            lambda position_data: NatNetTypes.Position.unpack(bytes(position_data))
-        )
+        markers: deque[MarkerData] = deque()
         for _ in range(num_marker_sets):
             name_bytes, _, _ = data[offset:].partition(b"\0")
             offset += len(name_bytes) + 1
@@ -60,17 +89,17 @@ class DataUnpackerV3_0:
             )
             positions = tuple(
                 map(
-                    position_unpacker,
+                    lambda position_data: Position.unpack(bytes(position_data)),
                     batched(data[offset : (offset := offset + (12 * num_markers))], 12),
                 )
             )
-            markers.append(NatNetTypes.Marker_data(name, num_markers, positions))
-        return NatNetTypes.Marker_set_data(num_marker_sets, tuple(markers)), offset
+            markers.append(MarkerData(name, num_markers, positions))
+        return MarkerSetData(num_marker_sets, tuple(markers)), offset
 
     @classmethod
     def unpack_legacy_other_markers(
         cls, data: bytes
-    ) -> Tuple[NatNetTypes.Legacy_marker_set_data, int]:
+    ) -> Tuple[LegacyMarkerSetData, int]:
         offset = 0
         num_markers = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -79,29 +108,27 @@ class DataUnpackerV3_0:
         offset += tmp_offset
         positions = deque(
             map(
-                lambda position_data: NatNetTypes.Position.unpack(bytes(position_data)),
+                lambda position_data: Position.unpack(bytes(position_data)),
                 batched(data[offset : (offset := offset + (12 * num_markers))], 12),
             )
         )
-        return NatNetTypes.Legacy_marker_set_data(num_markers, tuple(positions)), offset
+        return LegacyMarkerSetData(num_markers, tuple(positions)), offset
 
     @classmethod
-    def unpack_rigid_body(cls, data: bytes) -> NatNetTypes.Rigid_body:
+    def unpack_rigid_body(cls, data: bytes) -> RigidBody:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
-        rot = NatNetTypes.Quaternion.unpack(data[offset : (offset := offset + 16)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
+        rot = Quaternion.unpack(data[offset : (offset := offset + 16)])
         err = unpack("<f", data[offset : (offset := offset + 4)])[0]
         param: int = unpack("h", data[offset : (offset := offset + 2)])[0]
         tracking = bool(param & 0x01)
-        return NatNetTypes.Rigid_body(identifier, pos, rot, err, tracking)
+        return RigidBody(identifier, pos, rot, err, tracking)
 
     @classmethod
-    def unpack_rigid_body_data(
-        cls, data: bytes
-    ) -> Tuple[NatNetTypes.Rigid_body_data, int]:
+    def unpack_rigid_body_data(cls, data: bytes) -> Tuple[RigidBodyData, int]:
         offset = 0
         num_rigid_bodies = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -115,17 +142,17 @@ class DataUnpackerV3_0:
                     data[
                         offset : (
                             offset := offset
-                            + (cls.rigid_body_lenght * num_rigid_bodies)
+                            + (cls.rigid_body_length * num_rigid_bodies)
                         )
                     ],
-                    cls.rigid_body_lenght,
+                    cls.rigid_body_length,
                 ),
             )
         )
-        return NatNetTypes.Rigid_body_data(num_rigid_bodies, rigid_bodies), offset
+        return RigidBodyData(num_rigid_bodies, rigid_bodies), offset
 
     @classmethod
-    def unpack_skeleton(cls, data: bytes) -> Tuple[NatNetTypes.Skeleton, int]:
+    def unpack_skeleton(cls, data: bytes) -> Tuple[Skeleton, int]:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -140,44 +167,44 @@ class DataUnpackerV3_0:
                     data[
                         offset : (
                             offset := offset
-                            + (cls.rigid_body_lenght * num_rigid_bodies)
+                            + (cls.rigid_body_length * num_rigid_bodies)
                         )
                     ],
-                    cls.rigid_body_lenght,
+                    cls.rigid_body_length,
                 ),
             )
         )
-        return NatNetTypes.Skeleton(identifier, num_rigid_bodies, rigid_bodies), offset
+        return Skeleton(identifier, num_rigid_bodies, rigid_bodies), offset
 
     @classmethod
-    def unpack_skeleton_data(cls, data: bytes) -> Tuple[NatNetTypes.Skeleton_data, int]:
+    def unpack_skeleton_data(cls, data: bytes) -> Tuple[SkeletonData, int]:
         offset = 0
         num_skeletons = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
         _, tmp_offset = cls.unpack_data_size(data)
         offset += tmp_offset
-        skeletons: deque[NatNetTypes.Skeleton] = deque()
+        skeletons: deque[Skeleton] = deque()
         for _ in range(num_skeletons):
             skeleton, tmp_offset = cls.unpack_skeleton(data[offset:])
             offset += tmp_offset
             skeletons.append(skeleton)
-        return NatNetTypes.Skeleton_data(num_skeletons, tuple(skeletons)), offset
+        return SkeletonData(num_skeletons, tuple(skeletons)), offset
 
     @classmethod
-    def unpack_asset_rigid_body(cls, data: bytes) -> NatNetTypes.Asset_RB:
+    def unpack_asset_rigid_body(cls, data: bytes) -> AssetRigidBody:
         raise NotImplementedError("Subclasses must implement the unpack method")
 
     @classmethod
-    def unpack_asset_marker(cls, data: bytes) -> NatNetTypes.Asset_marker:
+    def unpack_asset_marker(cls, data: bytes) -> AssetMarker:
         raise NotImplementedError("Subclasses must implement the unpack method")
 
     @classmethod
-    def unpack_asset(cls, data: bytes) -> Tuple[NatNetTypes.Asset, int]:
+    def unpack_asset(cls, data: bytes) -> Tuple[Asset, int]:
         raise NotImplementedError("Subclasses must implement the unpack method")
 
     @classmethod
-    def unpack_asset_data(cls, data: bytes) -> Tuple[NatNetTypes.Asset_data, int]:
+    def unpack_asset_data(cls, data: bytes) -> Tuple[AssetData, int]:
         raise NotImplementedError("Subclasses must implement the unpack method")
 
     @classmethod
@@ -185,21 +212,19 @@ class DataUnpackerV3_0:
         return (identifier >> 16, identifier & 0x0000FFFF)
 
     @classmethod
-    def unpack_labeled_marker(cls, data: bytes) -> NatNetTypes.Labeled_marker:
+    def unpack_labeled_marker(cls, data: bytes) -> LabeledMarker:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
         size = unpack("<f", data[offset : (offset := offset + 4)])[0]
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
         residual = unpack("<f", data[offset : (offset := offset + 4)])[0] * 1000.0
-        return NatNetTypes.Labeled_marker(identifier, pos, size, param, residual)
+        return LabeledMarker(identifier, pos, size, param, residual)
 
     @classmethod
-    def unpack_labeled_marker_data(
-        cls, data: bytes
-    ) -> Tuple[NatNetTypes.Labeled_marker_data, int]:
+    def unpack_labeled_marker_data(cls, data: bytes) -> Tuple[LabeledMarkerData, int]:
         offset = 0
         num_markers = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -211,47 +236,42 @@ class DataUnpackerV3_0:
                 lambda marker_data: cls.unpack_labeled_marker(bytes(marker_data)),
                 batched(
                     data[
-                        offset : (offset := offset + (cls.marker_lenght * num_markers))
+                        offset : (offset := offset + (cls.marker_length * num_markers))
                     ],
-                    cls.marker_lenght,
+                    cls.marker_length,
                 ),
             )
         )
-        return NatNetTypes.Labeled_marker_data(num_markers, markers), offset
+        return LabeledMarkerData(num_markers, markers), offset
 
     @classmethod
     def unpack_channels(
         cls, data: bytes, num_channels: int
-    ) -> Tuple[Tuple[NatNetTypes.Channel, ...], int]:
+    ) -> Tuple[Tuple[Channel, ...], int]:
         offset = 0
-        channels: deque[NatNetTypes.Channel] = deque()
-        frame_unpacker: Callable[[Iterable[int]], float] = lambda frame_data: unpack(
-            "<f", bytes(frame_data)
-        )[0]
+        channels: deque[Channel] = deque()
         for _ in range(num_channels):
             num_frames = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
             )
             frames = tuple(
                 map(
-                    frame_unpacker,
+                    lambda frame_data: unpack("<f", bytes(frame_data))[0],
                     batched(data[offset : (offset := offset + (4 * num_frames))], 4),
                 )
             )
-            channels.append(NatNetTypes.Channel(num_frames, frames))
+            channels.append(Channel(num_frames, frames))
         return tuple(channels), offset
 
     @classmethod
-    def unpack_force_plate_data(
-        cls, data: bytes
-    ) -> Tuple[NatNetTypes.Force_plate_data, int]:
+    def unpack_force_plate_data(cls, data: bytes) -> Tuple[ForcePlateData, int]:
         offset = 0
         num_force_plates = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
         _, tmp_offset = cls.unpack_data_size(data)
         offset += tmp_offset
-        force_plates: deque[NatNetTypes.Force_plate] = deque()
+        force_plates: deque[ForcePlate] = deque()
         for _ in range(num_force_plates):
             identifier = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -261,23 +281,21 @@ class DataUnpackerV3_0:
             )
             channels, tmp_offset = cls.unpack_channels(data[offset:], num_channels)
             offset += tmp_offset
-            force_plates.append(
-                NatNetTypes.Force_plate(identifier, num_channels, channels)
-            )
+            force_plates.append(ForcePlate(identifier, num_channels, channels))
         return (
-            NatNetTypes.Force_plate_data(num_force_plates, tuple(force_plates)),
+            ForcePlateData(num_force_plates, tuple(force_plates)),
             offset,
         )
 
     @classmethod
-    def unpack_device_data(cls, data: bytes) -> Tuple[NatNetTypes.Device_data, int]:
+    def unpack_device_data(cls, data: bytes) -> Tuple[DeviceData, int]:
         offset = 0
         num_devices = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
         _, tmp_offset = cls.unpack_data_size(data)
         offset += tmp_offset
-        devices: deque[NatNetTypes.Device] = deque()
+        devices: deque[Device] = deque()
         for _ in range(num_devices):
             identifier = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -287,11 +305,11 @@ class DataUnpackerV3_0:
             )
             channels, tmp_offset = cls.unpack_channels(data[offset:], num_channels)
             offset += tmp_offset
-            devices.append(NatNetTypes.Device(identifier, num_channels, channels))
-        return NatNetTypes.Device_data(num_devices, tuple(devices)), offset
+            devices.append(Device(identifier, num_channels, channels))
+        return DeviceData(num_devices, tuple(devices)), offset
 
     @classmethod
-    def unpack_frame_suffix_data(cls, data: bytes) -> NatNetTypes.Frame_suffix:
+    def unpack_frame_suffix_data(cls, data: bytes) -> FrameSuffix:
         offset = 0
         time_code = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -312,7 +330,7 @@ class DataUnpackerV3_0:
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
         recording = bool(param & 0x01)
         tracked_models_changed = bool(param & 0x02)
-        return NatNetTypes.Frame_suffix(
+        return FrameSuffix(
             time_code,
             time_code_sub,
             timestamp,
@@ -324,7 +342,7 @@ class DataUnpackerV3_0:
         )
 
     @classmethod
-    def unpack_mocap_data(cls, data: bytes) -> NatNetTypes.MoCap:
+    def unpack_mocap_data(cls, data: bytes) -> MoCapDescription:
         offset = 0
         tmp_offset = 0
 
@@ -356,7 +374,7 @@ class DataUnpackerV3_0:
 
         suffix_data = cls.unpack_frame_suffix_data(data[offset:])
 
-        return NatNetTypes.MoCap(
+        return MoCapDescription(
             prefix_data,
             marker_set_data,
             legacy_marker_set_data,
@@ -371,7 +389,7 @@ class DataUnpackerV3_0:
     @classmethod
     def unpack_marker_set_description(
         cls, data: bytes
-    ) -> Tuple[Dict[str, NatNetTypes.Marker_set_description], int]:
+    ) -> Tuple[Dict[str, MarkerSetDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
@@ -385,15 +403,13 @@ class DataUnpackerV3_0:
             offset += len(marker_name) + 1
             markers_names.append(str(marker_name, encoding="utf-8"))
         return {
-            name: NatNetTypes.Marker_set_description(
-                name, num_markers, tuple(markers_names)
-            )
+            name: MarkerSetDescription(name, num_markers, tuple(markers_names))
         }, offset
 
     @classmethod
     def unpack_rigid_body_description(
         cls, data: bytes
-    ) -> Tuple[Dict[int, NatNetTypes.Rigid_body_description], int]:
+    ) -> Tuple[Dict[int, RigidBodyDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
@@ -404,7 +420,7 @@ class DataUnpackerV3_0:
         parent_id = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
         num_markers = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
@@ -412,9 +428,9 @@ class DataUnpackerV3_0:
         offset_id = offset_pos + (12 * num_markers)
         offset_name = offset_id + (4 * num_markers)
         marker_name = ""
-        markers: deque[NatNetTypes.RB_marker] = deque()
+        markers: deque[RigidBodyMarker] = deque()
         for _ in range(num_markers):
-            marker_pos = NatNetTypes.Position.unpack(
+            marker_pos = Position.unpack(
                 data[offset_pos : (offset_pos := offset_pos + 12)]
             )
             marker_id = int.from_bytes(
@@ -422,9 +438,9 @@ class DataUnpackerV3_0:
                 byteorder="little",
                 signed=True,
             )
-            markers.append(NatNetTypes.RB_marker(marker_name, marker_id, marker_pos))
+            markers.append(RigidBodyMarker(marker_name, marker_id, marker_pos))
         return {
-            identifier: NatNetTypes.Rigid_body_description(
+            identifier: RigidBodyDescription(
                 name, identifier, parent_id, pos, num_markers, tuple(markers)
             )
         }, offset_name
@@ -432,7 +448,7 @@ class DataUnpackerV3_0:
     @classmethod
     def unpack_skeleton_description(
         cls, data: bytes
-    ) -> Tuple[Dict[int, NatNetTypes.Skeleton_description], int]:
+    ) -> Tuple[Dict[int, SkeletonDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
@@ -443,14 +459,14 @@ class DataUnpackerV3_0:
         num_rigid_bodies = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        rigid_bodies: deque[NatNetTypes.Rigid_body_description] = deque()
+        rigid_bodies: deque[RigidBodyDescription] = deque()
         for _ in range(num_rigid_bodies):
             d, offset_tmp = cls.unpack_rigid_body_description(data[offset:])
             rigid_body = list(d.values())[0]
             rigid_bodies.append(rigid_body)
             offset += offset_tmp
         return {
-            identifier: NatNetTypes.Skeleton_description(
+            identifier: SkeletonDescription(
                 name, identifier, num_rigid_bodies, tuple(rigid_bodies)
             )
         }, offset
@@ -458,7 +474,7 @@ class DataUnpackerV3_0:
     @classmethod
     def unpack_force_plate_description(
         cls, data: bytes
-    ) -> Tuple[Dict[str, NatNetTypes.Force_plate_description], int]:
+    ) -> Tuple[Dict[str, ForcePlateDescription], int]:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -472,7 +488,7 @@ class DataUnpackerV3_0:
         f_length: float = unpack("<f", data[offset : (offset := offset + 4)])[0]
         dimensions = (f_width, f_length)
 
-        origin = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
+        origin = Position.unpack(data[offset : (offset := offset + 12)])
 
         # Not tested
         calibration_matrix = tuple(
@@ -499,7 +515,7 @@ class DataUnpackerV3_0:
             offset += len(channel_name) + 1
             channels.append(str(channel_name, encoding="utf-8"))
         return {
-            serial_number: NatNetTypes.Force_plate_description(
+            serial_number: ForcePlateDescription(
                 identifier,
                 serial_number,
                 dimensions,
@@ -516,7 +532,7 @@ class DataUnpackerV3_0:
     @classmethod
     def unpack_device_description(
         cls, data: bytes
-    ) -> Tuple[Dict[str, NatNetTypes.Device_description], int]:
+    ) -> Tuple[Dict[str, DeviceDescription], int]:
         offset = 0
 
         identifier = int.from_bytes(
@@ -546,7 +562,7 @@ class DataUnpackerV3_0:
             offset += len(channel_name) + 1
             channels.append(str(channel_name, encoding="utf-8"))
         return {
-            serial_number: NatNetTypes.Device_description(
+            serial_number: DeviceDescription(
                 identifier,
                 name,
                 serial_number,
@@ -560,21 +576,19 @@ class DataUnpackerV3_0:
     @classmethod
     def unpack_camera_description(
         cls, data: bytes
-    ) -> Tuple[Dict[str, NatNetTypes.Camera_description], int]:
+    ) -> Tuple[Dict[str, CameraDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
         name = str(name_bytes, encoding="utf-8")
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
-        orientation = NatNetTypes.Quaternion.unpack(
-            data[offset : (offset := offset + 16)]
-        )
-        return {name: NatNetTypes.Camera_description(name, pos, orientation)}, offset
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
+        orientation = Quaternion.unpack(data[offset : (offset := offset + 16)])
+        return {name: CameraDescription(name, pos, orientation)}, offset
 
     @classmethod
     def unpack_marker_description(
         cls, data: bytes
-    ) -> Tuple[Dict[int, NatNetTypes.Marker_description], int]:
+    ) -> Tuple[Dict[int, MarkerDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
@@ -582,19 +596,17 @@ class DataUnpackerV3_0:
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
         size = unpack("<f", data[offset : (offset := offset + 4)])[0]
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
         return {
-            identifier: NatNetTypes.Marker_description(
-                name, identifier, pos, size, param
-            )
+            identifier: MarkerDescription(name, identifier, pos, size, param)
         }, offset
 
     @classmethod
     def unpack_asset_description(
         cls, data: bytes
-    ) -> Tuple[Dict[int, NatNetTypes.Asset_description], int]:
+    ) -> Tuple[Dict[int, AssetDescription], int]:
         offset = 0
         name_bytes, _, _ = data[offset:].partition(b"\0")
         offset += len(name_bytes) + 1
@@ -608,7 +620,7 @@ class DataUnpackerV3_0:
         num_rigid_bodies = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        rigid_bodies: deque[NatNetTypes.Rigid_body_description] = deque()
+        rigid_bodies: deque[RigidBodyDescription] = deque()
         for _ in range(num_rigid_bodies):
             d_r, offset_tmp = cls.unpack_rigid_body_description(data[offset:])
             rigid_body = list(d_r.values())[0]
@@ -617,14 +629,14 @@ class DataUnpackerV3_0:
         num_markers = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        markers: deque[NatNetTypes.Marker_description] = deque()
+        markers: deque[MarkerDescription] = deque()
         for _ in range(num_markers):
             d_m, offset_tmp = cls.unpack_marker_description(data[offset:])
             marker = list(d_m.values())[0]
             markers.append(marker)
             offset += offset_tmp
         return {
-            identifier: NatNetTypes.Asset_description(
+            identifier: AssetDescription(
                 name,
                 asset_type,
                 identifier,
@@ -636,8 +648,8 @@ class DataUnpackerV3_0:
         }, offset
 
     @classmethod
-    def unpack_descriptors(cls, data: bytes) -> NatNetTypes.Descriptors:
-        descriptors = NatNetTypes.Descriptors()
+    def unpack_descriptors(cls, data: bytes) -> Descriptors:
+        descriptors = Descriptors()
         offset = 0
         tmp_offset = 0
         dataset_count = int.from_bytes(
@@ -648,43 +660,43 @@ class DataUnpackerV3_0:
             tag = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
             )
-            data_description_type = NatNetTypes.NAT_Data(tag)
-            if data_description_type is NatNetTypes.NAT_Data.MARKER_SET:
+            data_description_type = NatData(tag)
+            if data_description_type is NatData.MARKER_SET:
                 marker_set_description, tmp_offset = cls.unpack_marker_set_description(
                     data[offset:]
                 )
                 descriptors.marker_set_description.update(marker_set_description)
-            elif data_description_type is NatNetTypes.NAT_Data.RIGID_BODY:
+            elif data_description_type is NatData.RIGID_BODY:
                 rigid_body_description, tmp_offset = cls.unpack_rigid_body_description(
                     data[offset:]
                 )
                 descriptors.rigid_body_description.update(rigid_body_description)
-            elif data_description_type is NatNetTypes.NAT_Data.SKELETON:
+            elif data_description_type is NatData.SKELETON:
                 skeleton_description, tmp_offset = cls.unpack_skeleton_description(
                     data[offset:]
                 )
                 descriptors.skeleton_description.update(skeleton_description)
-            elif data_description_type is NatNetTypes.NAT_Data.FORCE_PLATE:
+            elif data_description_type is NatData.FORCE_PLATE:
                 force_plate_description, tmp_offset = (
                     cls.unpack_force_plate_description(data[offset:])
                 )
                 descriptors.force_plate_description.update(force_plate_description)
-            elif data_description_type is NatNetTypes.NAT_Data.DEVICE:
+            elif data_description_type is NatData.DEVICE:
                 device_description, tmp_offset = cls.unpack_device_description(
                     data[offset:]
                 )
                 descriptors.device_description.update(device_description)
-            elif data_description_type is NatNetTypes.NAT_Data.CAMERA:
+            elif data_description_type is NatData.CAMERA:
                 camera_description, tmp_offset = cls.unpack_camera_description(
                     data[offset:]
                 )
                 descriptors.camera_description.update(camera_description)
-            elif data_description_type is NatNetTypes.NAT_Data.ASSET:
+            elif data_description_type is NatData.ASSET:
                 asset_description, tmp_offset = cls.unpack_asset_description(
                     data[offset:]
                 )
                 descriptors.asset_description.update(asset_description)
-            elif data_description_type is NatNetTypes.NAT_Data.UNDEFINED:
+            elif data_description_type is NatData.UNDEFINED:
                 logger.error(f"ID: {tag} - Size: {size_in_bytes}")
                 continue
             offset += tmp_offset
@@ -692,9 +704,9 @@ class DataUnpackerV3_0:
 
 
 class DataUnpackerV4_1(DataUnpackerV3_0):
-    asset_rigid_body_lenght: int = 38
-    asset_marker_lenght: int = 26
-    frame_suffix_lenght: int = 50
+    asset_rigid_body_length: int = 38
+    asset_marker_length: int = 26
+    frame_suffix_length: int = 50
 
     @classmethod
     def unpack_data_size(cls, data: bytes) -> Tuple[int, int]:
@@ -705,31 +717,31 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
         return size_in_bytes, offset
 
     @classmethod
-    def unpack_asset_rigid_body(cls, data: bytes) -> NatNetTypes.Asset_RB:
+    def unpack_asset_rigid_body(cls, data: bytes) -> AssetRigidBody:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
-        rot = NatNetTypes.Quaternion.unpack(data[offset : (offset := offset + 16)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
+        rot = Quaternion.unpack(data[offset : (offset := offset + 16)])
         err = unpack("<f", data[offset : (offset := offset + 4)])[0]
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
-        return NatNetTypes.Asset_RB(identifier, pos, rot, err, param)
+        return AssetRigidBody(identifier, pos, rot, err, param)
 
     @classmethod
-    def unpack_asset_marker(cls, data: bytes) -> NatNetTypes.Asset_marker:
+    def unpack_asset_marker(cls, data: bytes) -> AssetMarker:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
-        pos = NatNetTypes.Position.unpack(data[offset : (offset := offset + 12)])
+        pos = Position.unpack(data[offset : (offset := offset + 12)])
         size = unpack("<f", data[offset : (offset := offset + 4)])[0]
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
         residual = unpack("<f", data[offset : (offset := offset + 4)])[0]
-        return NatNetTypes.Asset_marker(identifier, pos, size, param, residual)
+        return AssetMarker(identifier, pos, size, param, residual)
 
     @classmethod
-    def unpack_asset(cls, data: bytes) -> Tuple[NatNetTypes.Asset, int]:
+    def unpack_asset(cls, data: bytes) -> Tuple[Asset, int]:
         offset = 0
         identifier = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -746,10 +758,10 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
                     data[
                         offset : (
                             offset := offset
-                            + (cls.asset_rigid_body_lenght * num_rigid_bodies)
+                            + (cls.asset_rigid_body_length * num_rigid_bodies)
                         )
                     ],
-                    cls.asset_rigid_body_lenght,
+                    cls.asset_rigid_body_length,
                 ),
             )
         )
@@ -762,37 +774,35 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
                 batched(
                     data[
                         offset : (
-                            offset := offset + (cls.asset_marker_lenght * num_markers)
+                            offset := offset + (cls.asset_marker_length * num_markers)
                         )
                     ],
-                    cls.asset_marker_lenght,
+                    cls.asset_marker_length,
                 ),
             )
         )
         return (
-            NatNetTypes.Asset(
-                identifier, num_rigid_bodies, rigid_bodies, num_markers, markers
-            ),
+            Asset(identifier, num_rigid_bodies, rigid_bodies, num_markers, markers),
             offset,
         )
 
     @classmethod
-    def unpack_asset_data(cls, data: bytes) -> Tuple[NatNetTypes.Asset_data, int]:
+    def unpack_asset_data(cls, data: bytes) -> Tuple[AssetData, int]:
         offset = 0
         num_assets = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
         )
         _, tmp_offset = cls.unpack_data_size(data)
         offset += tmp_offset
-        assets: deque[NatNetTypes.Asset] = deque()
+        assets: deque[Asset] = deque()
         for _ in range(num_assets):
             asset, tmp_offset = cls.unpack_asset(data[offset:])
             offset += tmp_offset
             assets.append(asset)
-        return NatNetTypes.Asset_data(num_assets, tuple(assets)), offset
+        return AssetData(num_assets, tuple(assets)), offset
 
     @classmethod
-    def unpack_frame_suffix_data(cls, data: bytes) -> NatNetTypes.Frame_suffix:
+    def unpack_frame_suffix_data(cls, data: bytes) -> FrameSuffix:
         offset = 0
         time_code = int.from_bytes(
             data[offset : (offset := offset + 4)], byteorder="little", signed=True
@@ -819,7 +829,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
         param = unpack("h", data[offset : (offset := offset + 2)])[0]
         recording = bool(param & 0x01)
         tracked_models_changed = bool(param & 0x02)
-        return NatNetTypes.Frame_suffix(
+        return FrameSuffix(
             time_code,
             time_code_sub,
             timestamp,
@@ -833,7 +843,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
         )
 
     @classmethod
-    def unpack_mocap_data(cls, data: bytes) -> NatNetTypes.MoCap:
+    def unpack_mocap_data(cls, data: bytes) -> MoCapDescription:
         offset = 0
         tmp_offset = 0
 
@@ -868,7 +878,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
 
         suffix_data = cls.unpack_frame_suffix_data(data[offset:])
 
-        return NatNetTypes.MoCap(
+        return MoCapDescription(
             prefix_data,
             marker_set_data,
             legacy_marker_set_data,
@@ -884,7 +894,7 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
     @classmethod
     def unpack_rigid_body_description(
         cls, data: bytes
-    ) -> Tuple[Dict[int, NatNetTypes.Rigid_body_description], int]:
+    ) -> Tuple[Dict[int, RigidBodyDescription], int]:
         d, offset = super().unpack_rigid_body_description(data)
         rb_desc = tuple(d.values())[0]
         for marker in rb_desc.markers:
@@ -894,8 +904,8 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
         return d, offset
 
     @classmethod
-    def unpack_descriptors(cls, data: bytes) -> NatNetTypes.Descriptors:
-        descriptors = NatNetTypes.Descriptors()
+    def unpack_descriptors(cls, data: bytes) -> Descriptors:
+        descriptors = Descriptors()
         offset = 0
         tmp_offset = 0
         dataset_count = int.from_bytes(
@@ -905,46 +915,46 @@ class DataUnpackerV4_1(DataUnpackerV3_0):
             tag = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
             )
-            data_description_type = NatNetTypes.NAT_Data(tag)
+            data_description_type = NatData(tag)
             size_in_bytes = int.from_bytes(
                 data[offset : (offset := offset + 4)], byteorder="little", signed=True
             )
-            if data_description_type is NatNetTypes.NAT_Data.MARKER_SET:
+            if data_description_type is NatData.MARKER_SET:
                 marker_set_description, tmp_offset = cls.unpack_marker_set_description(
                     data[offset:]
                 )
                 descriptors.marker_set_description.update(marker_set_description)
-            elif data_description_type is NatNetTypes.NAT_Data.RIGID_BODY:
+            elif data_description_type is NatData.RIGID_BODY:
                 rigid_body_description, tmp_offset = cls.unpack_rigid_body_description(
                     data[offset:]
                 )
                 descriptors.rigid_body_description.update(rigid_body_description)
-            elif data_description_type is NatNetTypes.NAT_Data.SKELETON:
+            elif data_description_type is NatData.SKELETON:
                 skeleton_description, tmp_offset = cls.unpack_skeleton_description(
                     data[offset:]
                 )
                 descriptors.skeleton_description.update(skeleton_description)
-            elif data_description_type is NatNetTypes.NAT_Data.FORCE_PLATE:
+            elif data_description_type is NatData.FORCE_PLATE:
                 force_plate_description, tmp_offset = (
                     cls.unpack_force_plate_description(data[offset:])
                 )
                 descriptors.force_plate_description.update(force_plate_description)
-            elif data_description_type is NatNetTypes.NAT_Data.DEVICE:
+            elif data_description_type is NatData.DEVICE:
                 device_description, tmp_offset = cls.unpack_device_description(
                     data[offset:]
                 )
                 descriptors.device_description.update(device_description)
-            elif data_description_type is NatNetTypes.NAT_Data.CAMERA:
+            elif data_description_type is NatData.CAMERA:
                 camera_description, tmp_offset = cls.unpack_camera_description(
                     data[offset:]
                 )
                 descriptors.camera_description.update(camera_description)
-            elif data_description_type is NatNetTypes.NAT_Data.ASSET:
+            elif data_description_type is NatData.ASSET:
                 asset_description, tmp_offset = cls.unpack_asset_description(
                     data[offset:]
                 )
                 descriptors.asset_description.update(asset_description)
-            elif data_description_type is NatNetTypes.NAT_Data.UNDEFINED:
+            elif data_description_type is NatData.UNDEFINED:
                 logger.error(f"ID: {tag} - Size: {size_in_bytes}")
                 continue
             offset += tmp_offset

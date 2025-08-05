@@ -12,7 +12,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Natural Language :: English",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.10",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: GIS",
     "Typing :: Typed"
@@ -23,7 +23,7 @@ homepage = "https://optitrack.com/"
 repository = "https://github.com/IgnaciodelaTorreArias/natnet-client"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.10"
 
 
 [build-system]

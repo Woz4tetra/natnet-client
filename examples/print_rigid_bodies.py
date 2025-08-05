@@ -1,6 +1,6 @@
 import time
 
-from natnet_client.Client import NatNetClient, NatNetParams
+from natnet_client.client import NatNetClient, NatNetParams
 
 
 def main() -> None:

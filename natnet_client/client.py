@@ -10,8 +10,12 @@ from collections import deque
 from dataclasses import InitVar, asdict, dataclass, field
 from typing import ClassVar, Generator, Literal, Tuple
 
-import natnet_client.NatNetTypes as NNT
-import natnet_client.Unpackers as Unpackers
+import natnet_client.enums
+from natnet_client.exceptions import NatNetClientNotConnectedError
+from natnet_client.natnet_params import NatNetParams
+from natnet_client import unpackers
+
+from natnet_client.descriptors import MoCapDescription, Descriptors
 
 
 @dataclass(slots=True, frozen=True)
@@ -22,43 +26,9 @@ class ServerInfo:
     nat_net_minor: int
 
 
-@dataclass(slots=True, frozen=True, kw_only=True)
-class NatNetParams:
-    """
-    This class represents an example dataclass.
-
-    Args:
-        server_address: (str, optional). Defaults to "127.0.0.1"
-        local_ip_address: (str, optional). Defaults to "127.0.0.1"
-        use_multicast: (bool, optional). Defaults to True
-        multicast_address: (str, optional). Defaults to "239.255.42.99"
-        command_port: (int, optional). Defaults to 1510
-        data_port: (int, optional). Defaults to 1511
-
-        max_buffer_size: (int | None, optional). Size for server messages buffer. Defaults to None
-        connection_timeout: (float | None, optional). Time to wait for the server to send back its ServerInfo when using a context, passed to `NatNetClient.connect`. Defaults to None
-    """
-
-    server_address: str = '127.0.0.1'
-    local_ip_address: str = '127.0.0.1'
-    use_multicast: bool = True
-    multicast_address: str = '239.255.42.99'
-    command_port: int = 1510
-    data_port: int = 1511
-
-    max_buffer_size: int | None = None
-    connection_timeout: float | None = None
-
-
-class NatNetClientNotConnectedError(Exception):
-    def __init__(self, params: NatNetParams):
-        self.params = params
-        super().__init__('NatNetClient not connected')
-
-
 @dataclass
 class NatNetClient:
-    logger: ClassVar[logging.Logger] = logging.getLogger('NatNet')
+    logger: ClassVar[logging.Logger] = logging.getLogger("NatNet")
 
     init_params: InitVar[NatNetParams]
 
@@ -72,18 +42,26 @@ class NatNetClient:
     # _server_ready_async: asyncio.Event = field(init=False, default_factory=asyncio.Event)
     _stop: asyncio.Event = field(init=False, default_factory=asyncio.Event)
 
-    _server_responses_lock: threading.Lock = field(init=False, default_factory=threading.Lock)
+    _server_responses_lock: threading.Lock = field(
+        init=False, default_factory=threading.Lock
+    )
     _server_response: None | bytes = field(init=False, default=None)
-    _server_messages_lock: threading.Lock = field(init=False, default_factory=threading.Lock)
+    _server_messages_lock: threading.Lock = field(
+        init=False, default_factory=threading.Lock
+    )
 
     # Motion capture values synchronization
     _last_new_data_time: int = field(init=False, default=-1)
-    _mocap: NNT.MoCap | None = field(init=False, default=None)
-    _mocap_synchronous_event: threading.Event = field(init=False, default_factory=threading.Event)
+    _mocap: MoCapDescription | None = field(init=False, default=None)
+    _mocap_synchronous_event: threading.Event = field(
+        init=False, default_factory=threading.Event
+    )
     _mocap_loop: asyncio.AbstractEventLoop | None = field(init=False, default=None)
-    _mocap_asynchronous_event: asyncio.Event = field(init=False, default_factory=asyncio.Event)
+    _mocap_asynchronous_event: asyncio.Event = field(
+        init=False, default_factory=asyncio.Event
+    )
 
-    _descriptors: NNT.Descriptors | None = field(init=False, default=None)
+    _descriptors: Descriptors | None = field(init=False, default=None)
     _can_change_bitstream: bool = field(init=False, default=False)
 
     def __post_init__(self, init_params: NatNetParams) -> None:
@@ -105,7 +83,7 @@ class NatNetClient:
         return self._last_new_data_time
 
     @property
-    def last_mocap_data(self) -> None | NNT.MoCap:
+    def last_mocap_data(self) -> None | MoCapDescription:
         return self._mocap
 
     @property
@@ -114,14 +92,16 @@ class NatNetClient:
             return self._server_messages.copy()
 
     @property
-    def descriptors(self) -> NNT.Descriptors | None:
+    def descriptors(self) -> Descriptors | None:
         return self._descriptors
 
     @property
     def running(self) -> bool:
         return self._ready.is_set()
 
-    def MoCap(self, timeout: float | None = None) -> Generator[NNT.MoCap, None, None]:
+    def MoCap(
+        self, timeout: float | None = None
+    ) -> Generator[MoCapDescription, None, None]:
         """A generator used for iterating over new motion capture data received
 
         Args:
@@ -163,7 +143,7 @@ class NatNetClient:
         self._command_socket = self.create_socket(ip, proto)  # type: ignore
         if self._command_socket is None:
             self.logger.error(
-                'Error while creating command socket.\nCheck Motive/Server mode requested mode agreement.\n%s',
+                "Error while creating command socket.\nCheck Motive/Server mode requested mode agreement.\n%s",
                 self._params,
             )
             return
@@ -172,7 +152,7 @@ class NatNetClient:
             self._command_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     def _create_data_socket(self) -> None:
-        ip = '0.0.0.0'
+        ip = "0.0.0.0"
         proto = socket.IPPROTO_UDP
         port = 0
         if self._params.use_multicast:
@@ -181,7 +161,7 @@ class NatNetClient:
         self._data_socket = self.create_socket(ip, proto, port)  # type: ignore
         if self._data_socket is None:
             self.logger.error(
-                'Error while creating data socket.\nCheck Motive/Server mode requested mode agreement.\n%s',
+                "Error while creating data socket.\nCheck Motive/Server mode requested mode agreement.\n%s",
                 self._params,
             )
             return
@@ -200,21 +180,23 @@ class NatNetClient:
 
     def connect(self, timeout: float | None = None) -> bool:
         if self._ready.is_set():
-            raise RuntimeError('You are already connected')
+            raise RuntimeError("You are already connected")
         self._create_command_socket()
         if self._command_socket is None:
             return False
-        self.logger.debug('command socket created')
+        self.logger.debug("command socket created")
         self._create_data_socket()
         if self._data_socket is None:
             self._command_socket.close()
             return False
-        self.logger.debug('data socket created')
-        self.logger.info('Client connected')
-        self._bg_thread = threading.Thread(target=asyncio.run, args=(self._main_task(),))
+        self.logger.debug("data socket created")
+        self.logger.info("Client connected")
+        self._bg_thread = threading.Thread(
+            target=asyncio.run, args=(self._main_task(),)
+        )
         self._bg_thread.start()
         self._ready.wait()
-        self.send_request(NNT.NAT_Messages.CONNECT, '')
+        self.send_request(natnet_client.enums.NatMessages.CONNECT, "")
         connected = self._server_ready.wait(timeout)
         if not connected:
             self.shutdown()
@@ -225,18 +207,18 @@ class NatNetClient:
     def shutdown(self) -> None:
         if not self._ready.is_set():
             raise NatNetClientNotConnectedError(self.params)
-        self.logger.info('Shuting down client')
+        self.logger.info("Shuting down client")
         self._ready.clear()
         self._loop.call_soon_threadsafe(self._stop.set)
         self._bg_thread.join()
         self._command_socket.close()
         self._data_socket.close()
         self._server_ready.clear()
-        self.logger.info('Client shutdown')
+        self.logger.info("Client shutdown")
 
-    def __enter__(self) -> NatNetClient | None:
+    def __enter__(self) -> NatNetClient:
         if not self.connect(self._params.connection_timeout):
-            return None
+            raise RuntimeError("Failed to connect")
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -249,42 +231,44 @@ class NatNetClient:
             (self._params.server_address, self._params.command_port),
         )
 
-    def send_request(self, NAT_command: NNT.NAT_Messages, command: str) -> int:
+    def send_request(
+        self, NAT_command: natnet_client.enums.NatMessages, command: str
+    ) -> int:
         if not self._ready.is_set():
             raise NatNetClientNotConnectedError(self.params)
-        if NAT_command is NNT.NAT_Messages.UNDEFINED:
-            raise RuntimeError('You cannot send an UNDEFINED request')
+        if NAT_command is natnet_client.enums.NatMessages.UNDEFINED:
+            raise RuntimeError("You cannot send an UNDEFINED request")
         packet_size: int = 0
         if (
-            NAT_command is NNT.NAT_Messages.KEEP_ALIVE
-            or NAT_command is NNT.NAT_Messages.REQUEST_MODEL_DEF
-            or NAT_command is NNT.NAT_Messages.REQUEST_FRAME_OF_DATA
+            NAT_command is natnet_client.enums.NatMessages.KEEP_ALIVE
+            or NAT_command is natnet_client.enums.NatMessages.REQUEST_MODEL_DEF
+            or NAT_command is natnet_client.enums.NatMessages.REQUEST_FRAME_OF_DATA
         ):
-            command = ''
-        elif NAT_command is NNT.NAT_Messages.REQUEST:
+            command = ""
+        elif NAT_command is natnet_client.enums.NatMessages.REQUEST:
             packet_size = len(command) + 1
-        elif NAT_command is NNT.NAT_Messages.CONNECT:
+        elif NAT_command is natnet_client.enums.NatMessages.CONNECT:
             tmp_version = [4, 1, 0, 0]
             command = (
-                'Ping'.ljust(265, '\x00')
+                "Ping".ljust(265, "\x00")
                 + chr(tmp_version[0])
                 + chr(tmp_version[1])
                 + chr(tmp_version[2])
                 + chr(tmp_version[3])
-                + '\x00'
+                + "\x00"
             )
         packet_size = len(command) + 1
-        data = NAT_command.value.to_bytes(2, byteorder='little', signed=True)
-        data += packet_size.to_bytes(2, byteorder='little', signed=True)
-        data += command.encode('utf-8')
-        data += b'\0'
+        data = NAT_command.value.to_bytes(2, byteorder="little", signed=True)
+        data += packet_size.to_bytes(2, byteorder="little", signed=True)
+        data += command.encode("utf-8")
+        data += b"\0"
         future = asyncio.run_coroutine_threadsafe(self._send_request(data), self._loop)
         return future.result()
 
     def send_command(self, command: str) -> bool:
         res: int = -1
         for _ in range(3):
-            res = self.send_request(NNT.NAT_Messages.REQUEST, command)
+            res = self.send_request(natnet_client.enums.NatMessages.REQUEST, command)
             if res != -1:
                 break
         return res != -1
@@ -293,11 +277,12 @@ class NatNetClient:
         """
         Changes unpacker version based on server's bit stream version
         """
-        self._unpacker = Unpackers.DataUnpackerV3_0
+        self._unpacker = unpackers.DataUnpackerV3_0
         if (
-            self._server_info.nat_net_major == 4 and self._server_info.nat_net_minor >= 1
+            self._server_info.nat_net_major == 4
+            and self._server_info.nat_net_minor >= 1
         ) or self._server_info.nat_net_major == 0:
-            self._unpacker = Unpackers.DataUnpackerV4_1
+            self._unpacker = unpackers.DataUnpackerV4_1
         self._server_ready.set()
 
     def _unpack_mocap_data(self, data: bytes, packet_size: int) -> None:
@@ -312,13 +297,17 @@ class NatNetClient:
 
     def _unpack_server_info(self, data: bytes, packet_size: int) -> None:
         offset = 0
-        application_name_bytes, _, _ = data[offset : (offset := offset + 256)].partition(b'\0')
-        application_name = str(application_name_bytes, 'utf-8')
-        version = struct.unpack('BBBB', data[offset : (offset := offset + 4)])
+        application_name_bytes, _, _ = data[
+            offset : (offset := offset + 256)
+        ].partition(b"\0")
+        application_name = str(application_name_bytes, "utf-8")
+        version = struct.unpack("BBBB", data[offset : (offset := offset + 4)])
         nat_net_major, nat_net_minor, _, _ = struct.unpack(
-            'BBBB', data[offset : (offset := offset + 4)]
+            "BBBB", data[offset : (offset := offset + 4)]
         )
-        self._server_info = ServerInfo(application_name, version, nat_net_major, nat_net_minor)
+        self._server_info = ServerInfo(
+            application_name, version, nat_net_major, nat_net_minor
+        )
         self._update_unpacker_version()
         if nat_net_major >= 4 and self._params.use_multicast is False:
             self._can_change_bitstream = True
@@ -327,56 +316,62 @@ class NatNetClient:
         if packet_size == 4:
             self._server_response = data
             return
-        response_bytes, _, _ = data[:256].partition(b'\0')
+        response_bytes, _, _ = data[:256].partition(b"\0")
         if len(response_bytes) > 30:
             return
-        response = response_bytes.decode('utf-8')
-        messageList = response.split(',')
-        if len(messageList) > 1 and messageList[0] == 'Bitstream':
-            nn_version = messageList[1].split('.')
+        response = response_bytes.decode("utf-8")
+        messageList = response.split(",")
+        if len(messageList) > 1 and messageList[0] == "Bitstream":
+            nn_version = messageList[1].split(".")
             template = asdict(self._server_info)
             if len(nn_version) > 1:
-                template['nat_net_major'] = int(nn_version[0])
-                template['nat_net_minor'] = int(nn_version[1])
+                template["nat_net_major"] = int(nn_version[0])
+                template["nat_net_minor"] = int(nn_version[1])
                 self._server_info = ServerInfo(**template)
                 self._update_unpacker_version()
         self._server_response = data
 
     def _unpack_server_message(self, data: bytes, packet_size: int) -> None:
-        message, _, _ = data.partition(b'\0')
+        message, _, _ = data.partition(b"\0")
         with self._server_messages_lock:
-            self._server_messages.append(str(message, encoding='utf-8'))
+            self._server_messages.append(str(message, encoding="utf-8"))
 
     def _unpack_unrecognized_request(self, _: bytes, packet_size: int) -> None:
         self.logger.debug(
-            '%s - packet_size: %i', NNT.NAT_Messages.UNRECOGNIZED_REQUEST, packet_size
+            "%s - packet_size: %i",
+            natnet_client.enums.NatMessages.UNRECOGNIZED_REQUEST,
+            packet_size,
         )
 
     def _unpack_undefined_nat_message(self, _: bytes, packet_size: int) -> None:
-        self.logger.debug('%s - packet_size: %i', NNT.NAT_Messages.UNDEFINED, packet_size)
+        self.logger.debug(
+            "%s - packet_size: %i",
+            natnet_client.enums.NatMessages.UNDEFINED,
+            packet_size,
+        )
 
     def _process_message(self, data: bytes) -> None:
         offset = 0
         message_id = int.from_bytes(
-            data[offset : (offset := offset + 2)], byteorder='little', signed=True
+            data[offset : (offset := offset + 2)], byteorder="little", signed=True
         )
-        message = NNT.NAT_Messages(message_id)
+        message = natnet_client.enums.NatMessages(message_id)
         packet_size = int.from_bytes(
-            data[offset : (offset := offset + 2)], byteorder='little', signed=True
+            data[offset : (offset := offset + 2)], byteorder="little", signed=True
         )
-        if message is NNT.NAT_Messages.FRAME_OF_DATA:
+        if message is natnet_client.enums.NatMessages.FRAME_OF_DATA:
             self._unpack_mocap_data(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.MODEL_DEF:
+        elif message is natnet_client.enums.NatMessages.MODEL_DEF:
             self._unpack_data_descriptions(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.SERVER_INFO:
+        elif message is natnet_client.enums.NatMessages.SERVER_INFO:
             self._unpack_server_info(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.RESPONSE:
+        elif message is natnet_client.enums.NatMessages.RESPONSE:
             self._unpack_server_response(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.MESSAGE_STRING:
+        elif message is natnet_client.enums.NatMessages.MESSAGE_STRING:
             self._unpack_server_message(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.UNRECOGNIZED_REQUEST:
+        elif message is natnet_client.enums.NatMessages.UNRECOGNIZED_REQUEST:
             self._unpack_unrecognized_request(data[offset:], packet_size)
-        elif message is NNT.NAT_Messages.UNDEFINED:
+        elif message is natnet_client.enums.NatMessages.UNDEFINED:
             self._unpack_undefined_nat_message(data[offset:], packet_size)
 
     async def _main_task(self) -> None:
@@ -387,7 +382,7 @@ class NatNetClient:
 
     async def _data_task(self) -> None:
         data = bytes()
-        self.logger.info('Data task started')
+        self.logger.info("Data task started")
         recv_buffer_size = 64 * 1024
         while True:
             try:
@@ -395,17 +390,17 @@ class NatNetClient:
                     self._loop.sock_recv(self._data_socket, recv_buffer_size), 3
                 )
             except asyncio.TimeoutError:
-                self.logger.debug('Data socket timeout')
+                self.logger.debug("Data socket timeout")
                 data = bytes()
             except Exception as msg:
-                self.logger.error('Data error %s: %s', self._params, msg)
+                self.logger.error("Data error %s: %s", self._params, msg)
                 data = bytes()
             if len(data):
                 self._process_message(data)
 
     async def _command_task(self) -> None:
         data = bytes()
-        self.logger.info('Command task')
+        self.logger.info("Command task")
         recv_buffer_size = 64 * 1024
         while True:
             try:
@@ -413,17 +408,17 @@ class NatNetClient:
                     self._loop.sock_recv(self._command_socket, recv_buffer_size), 3
                 )
             except asyncio.TimeoutError:
-                self.logger.debug('Command socket timeout')
+                self.logger.debug("Command socket timeout")
                 data = bytes()
             except Exception as msg:
-                self.logger.error('Command error %s: %s', self._params, msg)
+                self.logger.error("Command error %s: %s", self._params, msg)
                 data = bytes()
             if len(data):
                 self._process_message(data)
 
     async def _keep_alive_task(self) -> None:
-        self.logger.info('Command thread start')
-        keep_alive = b'\n\x00\x00\x00\x00'
+        self.logger.info("Command thread start")
+        keep_alive = b"\n\x00\x00\x00\x00"
         while True:
             await self._loop.sock_sendto(
                 self._command_socket,
@@ -441,10 +436,10 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('UnitesToMillimeters')
+            self.send_command("UnitesToMillimeters")
             while self._server_response is None:
                 time.sleep(0.001)
-            res = struct.unpack('f', self._server_response)[0]
+            res = struct.unpack("f", self._server_response)[0]
             self._server_response = None
             return res
 
@@ -454,35 +449,35 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('FrameRate')
+            self.send_command("FrameRate")
             while self._server_response is None:
                 time.sleep(0.001)
-            res = struct.unpack('f', self._server_response)[0]
+            res = struct.unpack("f", self._server_response)[0]
             self._server_response = None
             return res
 
     def CurrentMode(
         self,
-    ) -> Literal['live', 'recording', 'playback', 'edit', 'unknown']:
+    ) -> Literal["live", "recording", "playback", "edit", "unknown"]:
         """
         Raises:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('CurrentMode')
+            self.send_command("CurrentMode")
             while self._server_response is None:
                 time.sleep(0.001)
-            res = int.from_bytes(self._server_response, byteorder='little', signed=True)
+            res = int.from_bytes(self._server_response, byteorder="little", signed=True)
             self._server_response = None
             if res == 0:
-                return 'live'
+                return "live"
             if res == 1:
-                return 'recording'
+                return "recording"
             if res == 2:
-                return 'playback'
+                return "playback"
             if res == 3:
-                return 'edit'
-            return 'unknown'
+                return "edit"
+            return "unknown"
 
     def StartRecording(self) -> None:
         """
@@ -490,7 +485,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('StartRecording')
+            self.send_command("StartRecording")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -501,7 +496,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('StopRecording')
+            self.send_command("StopRecording")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -512,7 +507,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('LiveMode')
+            self.send_command("LiveMode")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -523,7 +518,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('EditMode')
+            self.send_command("EditMode")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -534,7 +529,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('TimelinePlay')
+            self.send_command("TimelinePlay")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -545,7 +540,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('TimelineStop')
+            self.send_command("TimelineStop")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -556,7 +551,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetPlaybackTakeName,' + name)
+            self.send_command("SetPlaybackTakeName," + name)
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -567,7 +562,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetRecordTakeName,' + name)
+            self.send_command("SetRecordTakeName," + name)
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -578,7 +573,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetCurrentSession,' + name)
+            self.send_command("SetCurrentSession," + name)
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -591,10 +586,10 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('CurrentSessionPath')
+            self.send_command("CurrentSessionPath")
             while self._server_response is None:
                 time.sleep(0.001)
-            res = self._server_response.partition(b'\0')[0].decode()
+            res = self._server_response.partition(b"\0")[0].decode()
             self._server_response = None
             return res
 
@@ -604,7 +599,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetPlaybackStartFrame,' + str(frame))
+            self.send_command("SetPlaybackStartFrame," + str(frame))
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -615,7 +610,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetPlaybackStopFrame,' + str(frame))
+            self.send_command("SetPlaybackStopFrame," + str(frame))
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -626,7 +621,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('SetPlaybackCurrentFrame,' + str(frame))
+            self.send_command("SetPlaybackCurrentFrame," + str(frame))
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -638,9 +633,9 @@ class NatNetClient:
         """
         with self._server_responses_lock:
             if val:
-                self.send_command('SetPlaybackLooping')
+                self.send_command("SetPlaybackLooping")
             else:
-                self.send_command('SetPlaybackLooping, 0')
+                self.send_command("SetPlaybackLooping, 0")
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -651,7 +646,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('EnableAsset,' + name)
+            self.send_command("EnableAsset," + name)
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -662,7 +657,7 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('DisableAsset,' + name)
+            self.send_command("DisableAsset," + name)
             while self._server_response is None:
                 time.sleep(0.001)
             self._server_response = None
@@ -675,14 +670,16 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('GetProperty,' + node_name + ',' + property_name)
+            self.send_command("GetProperty," + node_name + "," + property_name)
             while self._server_response is None:
                 time.sleep(0.001)
-            res = int.from_bytes(self._server_response, byteorder='little', signed=True)
+            res = int.from_bytes(self._server_response, byteorder="little", signed=True)
             self._server_response = None
             return res
 
-    def SetProperty(self, node_name: str, property_name: str, property_value: str) -> int:
+    def SetProperty(
+        self, node_name: str, property_name: str, property_value: str
+    ) -> int:
         """
         Returns:
             int: # TODO
@@ -691,11 +688,11 @@ class NatNetClient:
         """
         with self._server_responses_lock:
             self.send_command(
-                'SetProperty,' + node_name + ',' + property_name + ',' + property_value
+                "SetProperty," + node_name + "," + property_name + "," + property_value
             )
             while self._server_response is None:
                 time.sleep(0.001)
-            res = int.from_bytes(self._server_response, byteorder='little', signed=True)
+            res = int.from_bytes(self._server_response, byteorder="little", signed=True)
             self._server_response = None
             return res
 
@@ -705,10 +702,10 @@ class NatNetClient:
             NatNetClientNotConnectedError. If there is no connection
         """
         with self._server_responses_lock:
-            self.send_command('CurrentTakeLength')
+            self.send_command("CurrentTakeLength")
             while self._server_response is None:
                 time.sleep(0.001)
-            res = int.from_bytes(self._server_response, byteorder='little', signed=True)
+            res = int.from_bytes(self._server_response, byteorder="little", signed=True)
             self._server_response = None
             return res
 
