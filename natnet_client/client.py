@@ -99,7 +99,7 @@ class NatNetClient:
     def running(self) -> bool:
         return self._ready.is_set()
 
-    def MoCap(
+    def mocap(
         self, timeout: float | None = None
     ) -> Generator[MoCapDescription, None, None]:
         """A generator used for iterating over new motion capture data received
